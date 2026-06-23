@@ -1,7 +1,7 @@
 # Configuración del Cluster de HiveMQ
 
 ## Credenciales
-* **Usuario**: jardinero-cc2
+* **Usuario**: jardinero_cc2
 * **Password**: Pepe-cc2
 
 ## General
