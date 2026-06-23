@@ -1,0 +1,26 @@
+{
+  "name": "Control-CC2",
+  "short_name": "Control-CC2",
+  "description": "Control inteligente de las zonas de riego de casa.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#091512",
+  "theme_color": "#0d1f1b",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
