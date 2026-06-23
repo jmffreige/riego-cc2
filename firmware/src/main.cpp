@@ -1,14 +1,21 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include <cstring>
 #include "secrets.h" // Importamos nuestras credenciales seguras
 
 // Definición de pines (Usamos el LED amarillo en GPIO2 como prueba del relé)
 const int pinRele = 2; 
+const char* topicComando = "riego/zona1/cmd";
+const char* topicEstado = "riego/zona1/state";
 
 // Instancias de los clientes
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
+
+// La publicación se hace fuera del callback para no reutilizar el búfer MQTT
+// mientras todavía se está procesando el mensaje recibido.
+const char* estadoPendiente = nullptr;
 
 // Declaración de funciones
 void setup_wifi();
@@ -17,6 +24,9 @@ void reconnect();
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);
+  Serial.println();
+
   pinMode(pinRele, OUTPUT);
   digitalWrite(pinRele, LOW); // Aseguramos que la válvula empiece cerrada
 
@@ -51,29 +61,34 @@ void setup_wifi() {
 
 // La función mágica: se ejecuta automáticamente al recibir un mensaje
 void callback(char* topic, byte* payload, unsigned int length) {
-  String messageTemp;
-  
-  // Convertimos el payload (bytes) en un String (texto)
-  for (int i = 0; i < length; i++) {
-    messageTemp += (char)payload[i];
+  // Solo aceptamos los comandos "ON" y "OFF".
+  char mensaje[4] = {};
+  if (length == 0 || length >= sizeof(mensaje)) {
+    Serial.println("Mensaje MQTT ignorado: longitud no valida");
+    return;
   }
+
+  memcpy(mensaje, payload, length);
+  mensaje[length] = '\0';
 
   Serial.print("Mensaje recibido en [");
   Serial.print(topic);
   Serial.print("]: ");
-  Serial.println(messageTemp);
+  Serial.println(mensaje);
 
   // Lógica de encendido/apagado para la Zona 1
-  if (String(topic) == "riego/zona1/cmd") {
-    if (messageTemp == "ON") {
+  if (strcmp(topic, topicComando) == 0) {
+    if (strcmp(mensaje, "ON") == 0) {
       digitalWrite(pinRele, HIGH);
-      Serial.println("Acción: Válvula ABIERTA");
-      client.publish("riego/zona1/state", "ON"); // Reportamos el estado al cartero
+      estadoPendiente = "ON";
+      Serial.println("Accion: Valvula ABIERTA");
     } 
-    else if (messageTemp == "OFF") {
+    else if (strcmp(mensaje, "OFF") == 0) {
       digitalWrite(pinRele, LOW);
-      Serial.println("Acción: Válvula CERRADA");
-      client.publish("riego/zona1/state", "OFF"); // Reportamos el estado al cartero
+      estadoPendiente = "OFF";
+      Serial.println("Accion: Valvula CERRADA");
+    } else {
+      Serial.println("Comando desconocido");
     }
   }
 }
@@ -88,7 +103,7 @@ void reconnect() {
       Serial.println("¡Conectado al Broker!");
       
       // Una vez conectados, nos suscribimos al topic para escuchar órdenes
-      client.subscribe("riego/zona1/cmd");
+      client.subscribe(topicComando);
     } else {
       Serial.print("Falló, código de error = ");
       Serial.print(client.state());
@@ -106,4 +121,13 @@ void loop() {
   
   // Mantiene vivo el hilo de escucha con el Broker
   client.loop();
+
+  // Publicamos después de terminar de procesar el mensaje entrante.
+  if (estadoPendiente != nullptr && client.connected()) {
+    if (client.publish(topicEstado, estadoPendiente, true)) {
+      estadoPendiente = nullptr;
+    } else {
+      Serial.println("No se pudo publicar el estado; se reintentara");
+    }
+  }
 }
