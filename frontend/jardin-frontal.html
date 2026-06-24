@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0d1f1b" />
+    <meta name="description" content="Control de las zonas de riego del Jardín Frontal." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Control-CC2" />
+
+    <title>Jardín Frontal · Control-CC2</title>
+
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="apple-touch-icon" href="./icon-512.png" />
+    <link rel="icon" href="./icon-192.png" />
+    <link rel="preconnect" href="https://unpkg.com" />
+    <link rel="stylesheet" href="./style.css" />
+    <script src="https://unpkg.com/mqtt@5.15.1/dist/mqtt.min.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+
+  <body>
+    <div class="ambient ambient--one" aria-hidden="true"></div>
+    <div class="ambient ambient--two" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="back-link" href="./index.html" aria-label="Volver al menú principal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+          <span>Inicio</span>
+        </a>
+
+        <button class="connection-pill" id="open-settings" type="button" aria-label="Configurar conexión MQTT">
+          <span class="connection-pill__dot" aria-hidden="true"></span>
+          <span id="connection-label">Sin configurar</span>
+        </button>
+      </header>
+
+      <section class="garden-hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Exterior</p>
+          <h1 id="page-title">Jardín Frontal</h1>
+          <p>Control independiente de las cuatro zonas de riego.</p>
+        </div>
+
+        <article class="metric garden-connection">
+          <span class="metric__icon metric__icon--water" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2.8s6.4 6.9 6.4 12a6.4 6.4 0 1 1-12.8 0c0-5.1 6.4-12 6.4-12Z" /></svg>
+          </span>
+          <span>
+            <small>Estado general</small>
+            <strong id="system-summary">Esperando conexión</strong>
+          </span>
+        </article>
+      </section>
+
+      <section class="devices-section devices-section--wide" aria-labelledby="devices-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Dispositivos</p>
+            <h2 id="devices-title">Zonas de riego</h2>
+          </div>
+          <span class="device-count">4 zonas</span>
+        </div>
+
+        <div class="zones-grid" id="zones-grid"></div>
+      </section>
+
+      <p class="footer-note">Control-CC2 · Conectado con HiveMQ</p>
+    </main>
+
+    <dialog class="settings-dialog" id="settings-dialog">
+      <form class="settings" id="settings-form">
+        <div class="settings__head">
+          <div>
+            <p class="eyebrow">Conexión segura</p>
+            <h2>Configurar HiveMQ</h2>
+          </div>
+          <button class="icon-button" id="close-settings" type="button" aria-label="Cerrar configuración">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+
+        <p class="settings__intro">La contraseña se conserva únicamente durante esta sesión y no se escribe en el código.</p>
+
+        <label>
+          <span>Servidor</span>
+          <input id="mqtt-host" name="host" type="text" autocomplete="url" required />
+        </label>
+
+        <div class="field-row">
+          <label>
+            <span>Puerto WSS</span>
+            <input id="mqtt-port" name="port" type="number" inputmode="numeric" min="1" max="65535" required />
+          </label>
+          <label>
+            <span>Usuario</span>
+            <input id="mqtt-user" name="username" type="text" autocomplete="username" required />
+          </label>
+        </div>
+
+        <label>
+          <span>Contraseña</span>
+          <div class="password-field">
+            <input id="mqtt-password" name="password" type="password" autocomplete="current-password" required />
+            <button id="toggle-password" type="button" aria-label="Mostrar contraseña">Mostrar</button>
+          </div>
+        </label>
+
+        <p class="form-error" id="form-error" role="alert"></p>
+
+        <button class="primary-button" id="connect-button" type="submit">
+          <span>Conectar panel</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        </button>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <noscript>Necesitas activar JavaScript para controlar el sistema de riego.</noscript>
+  </body>
+</html>

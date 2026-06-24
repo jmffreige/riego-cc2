@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0d1f1b" />
-    <meta name="description" content="Control inteligente del riego de casa." />
+    <meta name="description" content="Control de las distintas zonas de casa." />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Control-CC2" />
@@ -14,10 +14,9 @@
     <link rel="manifest" href="./manifest.json" />
     <link rel="apple-touch-icon" href="./icon-512.png" />
     <link rel="icon" href="./icon-192.png" />
-    <link rel="preconnect" href="https://unpkg.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="stylesheet" href="./style.css" />
-    <script src="https://unpkg.com/mqtt@5.15.1/dist/mqtt.min.js" defer></script>
-    <script src="./app.js" defer></script>
+    <script src="./home.js" defer></script>
   </head>
 
   <body>
@@ -28,160 +27,51 @@
       <header class="topbar">
         <a class="brand" href="./" aria-label="Inicio de Control-CC2">
           <img class="brand__icon" src="./icon-192.png" alt="" />
-          <span>
-            <strong>Control-CC2</strong>
-          </span>
+          <span><strong>Control-CC2</strong></span>
         </a>
-
-        <button class="connection-pill" id="open-settings" type="button" aria-label="Configurar conexión MQTT">
-          <span class="connection-pill__dot" aria-hidden="true"></span>
-          <span id="connection-label">Sin configurar</span>
-        </button>
       </header>
 
-      <section class="hero" aria-labelledby="page-title">
-        <div>
-          <p class="eyebrow">Panel de control</p>
-          <h1 id="page-title">Control-CC2</h1>
-        </div>
+      <section class="home-hero" aria-labelledby="page-title">
+        <p class="eyebrow">Mi hogar</p>
+        <h1 id="page-title">¿Qué zona quieres controlar?</h1>
+        <p>Accede a los dispositivos conectados de cada espacio.</p>
       </section>
 
-      <section class="summary-grid" aria-label="Resumen del sistema">
-        <article class="metric">
-          <span class="metric__icon metric__icon--water" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 2.8s6.4 6.9 6.4 12a6.4 6.4 0 1 1-12.8 0c0-5.1 6.4-12 6.4-12Z" /></svg>
-          </span>
-          <span>
-            <small>Estado general</small>
-            <strong id="system-summary">Esperando conexión</strong>
-          </span>
-        </article>
-
-        <article class="metric">
-          <span class="metric__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M4 17h2.2a7 7 0 0 1 11.6 0H20M7.1 13.4a7 7 0 0 1 9.8 0M10.2 10.2a2.6 2.6 0 0 1 3.6 0M12 19.5v.1" /></svg>
-          </span>
-          <span>
-            <small>Dispositivos</small>
-            <strong>1 conectado</strong>
-          </span>
-        </article>
-      </section>
-
-      <section class="devices-section" aria-labelledby="devices-title">
+      <section class="spaces-section" aria-labelledby="spaces-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Dispositivos</p>
-            <h2 id="devices-title">Zonas de riego</h2>
+            <p class="eyebrow">Espacios</p>
+            <h2 id="spaces-title">Zonas de la casa</h2>
           </div>
           <span class="device-count">1 zona</span>
         </div>
 
-        <article class="device-card" id="zone-card" data-state="unknown">
-          <div class="device-card__head">
-            <div class="device-identity">
-              <span class="device-identity__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M12 3v5M8.5 8h7M7 12c-2.5 0-4 1.4-4 3.5M17 12c2.5 0 4 1.4 4 3.5M8 12c0 3-1.5 5.5-4.5 7M16 12c0 3 1.5 5.5 4.5 7M12 12v8" />
-                </svg>
-              </span>
-              <span>
-                <small>Jardín</small>
-                <h3>Zona 1</h3>
-              </span>
+        <div class="spaces-grid">
+          <a class="space-card" href="./jardin-frontal.html">
+            <div class="space-card__visual" aria-hidden="true">
+              <span class="space-card__sun"></span>
+              <svg viewBox="0 0 320 180">
+                <path class="space-card__ground" d="M0 142c45-28 91-30 136-7 45-34 104-35 184 4v41H0Z" />
+                <path class="space-card__plant" d="M158 145V88m0 31c-29-3-43-18-44-44 27 2 42 17 44 44Zm0-15c27-3 42-18 44-44-27 2-42 17-44 44Z" />
+                <path class="space-card__water" d="M75 112c14-22 37-32 68-30M245 112c-14-22-37-32-68-30" />
+              </svg>
             </div>
 
-            <span class="state-badge" id="zone-badge">
-              <span aria-hidden="true"></span>
-              Desconocido
-            </span>
-          </div>
-
-          <div class="device-visual" aria-hidden="true">
-            <div class="water-rings">
-              <span></span>
-              <span></span>
-              <span></span>
+            <div class="space-card__content">
+              <div>
+                <small>Exterior</small>
+                <h3>Jardín Frontal</h3>
+                <p>4 zonas de riego</p>
+              </div>
+              <span class="space-card__arrow" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+              </span>
             </div>
-            <svg class="sprinkler" viewBox="0 0 180 130">
-              <path class="sprinkler__water sprinkler__water--left" d="M78 41C52 30 25 37 12 57" />
-              <path class="sprinkler__water sprinkler__water--right" d="M102 41c26-11 53-4 66 16" />
-              <path class="sprinkler__water sprinkler__water--far-left" d="M72 32C43 13 15 21 4 40" />
-              <path class="sprinkler__water sprinkler__water--far-right" d="M108 32c29-19 57-11 68 8" />
-              <path class="sprinkler__body" d="M78 34h24v17H78zM84 51h12v42H84zM67 93h46v10H67z" />
-            </svg>
-          </div>
-
-          <div class="device-status">
-            <p id="zone-status">Conecta el panel para consultar el estado.</p>
-            <time id="last-update" datetime="">Sin datos todavía</time>
-          </div>
-
-          <div class="device-actions" role="group" aria-label="Control de la Zona 1">
-            <button class="action-button action-button--off" id="turn-off" type="button" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.4 6.3a8 8 0 1 1-12.8 0M12 3v9" /></svg>
-              Apagar
-            </button>
-            <button class="action-button action-button--on" id="turn-on" type="button" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a8 8 0 0 0 0-16M12 2v10l4 2" /></svg>
-              Encender
-            </button>
-          </div>
-        </article>
+          </a>
+        </div>
       </section>
 
-      <p class="footer-note">Control-CC2 · Conectado con HiveMQ</p>
+      <p class="footer-note">Control-CC2 · Hogar conectado</p>
     </main>
-
-    <dialog class="settings-dialog" id="settings-dialog">
-      <form class="settings" id="settings-form">
-        <div class="settings__head">
-          <div>
-            <p class="eyebrow">Conexión segura</p>
-            <h2>Configurar HiveMQ</h2>
-          </div>
-          <button class="icon-button" id="close-settings" type="button" aria-label="Cerrar configuración">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
-          </button>
-        </div>
-
-        <p class="settings__intro">La contraseña se conserva únicamente durante esta sesión y no se escribe en el código.</p>
-
-        <label>
-          <span>Servidor</span>
-          <input id="mqtt-host" name="host" type="text" autocomplete="url" required />
-        </label>
-
-        <div class="field-row">
-          <label>
-            <span>Puerto WSS</span>
-            <input id="mqtt-port" name="port" type="number" inputmode="numeric" min="1" max="65535" required />
-          </label>
-          <label>
-            <span>Usuario</span>
-            <input id="mqtt-user" name="username" type="text" autocomplete="username" required />
-          </label>
-        </div>
-
-        <label>
-          <span>Contraseña</span>
-          <div class="password-field">
-            <input id="mqtt-password" name="password" type="password" autocomplete="current-password" required />
-            <button id="toggle-password" type="button" aria-label="Mostrar contraseña">Mostrar</button>
-          </div>
-        </label>
-
-        <p class="form-error" id="form-error" role="alert"></p>
-
-        <button class="primary-button" id="connect-button" type="submit">
-          <span>Conectar panel</span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-        </button>
-      </form>
-    </dialog>
-
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
-
-    <noscript>Necesitas activar JavaScript para controlar el sistema de riego.</noscript>
   </body>
 </html>

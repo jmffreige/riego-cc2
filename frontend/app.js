@@ -2,20 +2,27 @@ const MQTT_DEFAULTS = Object.freeze({
   host: "36259d97745649d69b665673ad1883e7.s1.eu.hivemq.cloud",
   port: 8884,
   username: "jardinero_cc2",
-  commandTopic: "riego/zona1/cmd",
-  stateTopic: "riego/zona1/state",
 });
+
+const ZONES = Object.freeze(
+  Array.from({ length: 4 }, (_, index) => {
+    const id = index + 1;
+    return {
+      id,
+      name: `Zona ${id}`,
+      commandTopic: `riego/zona${id}/cmd`,
+      stateTopic: `riego/zona${id}/state`,
+    };
+  }),
+);
+
+const zoneStates = new Map(ZONES.map((zone) => [zone.id, "unknown"]));
 
 const elements = {
   connectionButton: document.querySelector("#open-settings"),
   connectionLabel: document.querySelector("#connection-label"),
   systemSummary: document.querySelector("#system-summary"),
-  zoneCard: document.querySelector("#zone-card"),
-  zoneBadge: document.querySelector("#zone-badge"),
-  zoneStatus: document.querySelector("#zone-status"),
-  lastUpdate: document.querySelector("#last-update"),
-  turnOn: document.querySelector("#turn-on"),
-  turnOff: document.querySelector("#turn-off"),
+  zonesGrid: document.querySelector("#zones-grid"),
   dialog: document.querySelector("#settings-dialog"),
   closeSettings: document.querySelector("#close-settings"),
   form: document.querySelector("#settings-form"),
@@ -31,6 +38,58 @@ const elements = {
 
 let client = null;
 let toastTimer = null;
+
+function sprinklerMarkup() {
+  return `
+    <div class="device-visual" aria-hidden="true">
+      <div class="water-rings"><span></span><span></span><span></span></div>
+      <svg class="sprinkler" viewBox="0 0 180 130">
+        <path class="sprinkler__water sprinkler__water--left" d="M78 41C52 30 25 37 12 57" />
+        <path class="sprinkler__water sprinkler__water--right" d="M102 41c26-11 53-4 66 16" />
+        <path class="sprinkler__water sprinkler__water--far-left" d="M72 32C43 13 15 21 4 40" />
+        <path class="sprinkler__water sprinkler__water--far-right" d="M108 32c29-19 57-11 68 8" />
+        <path class="sprinkler__body" d="M78 34h24v17H78zM84 51h12v42H84zM67 93h46v10H67z" />
+      </svg>
+    </div>`;
+}
+
+function renderZones() {
+  elements.zonesGrid.innerHTML = ZONES.map(
+    (zone) => `
+      <article class="device-card" id="zone-card-${zone.id}" data-zone="${zone.id}" data-state="unknown">
+        <div class="device-card__head">
+          <div class="device-identity">
+            <span class="device-identity__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3v5M8.5 8h7M7 12c-2.5 0-4 1.4-4 3.5M17 12c2.5 0 4 1.4 4 3.5M8 12c0 3-1.5 5.5-4.5 7M16 12c0 3 1.5 5.5 4.5 7M12 12v8" />
+              </svg>
+            </span>
+            <span>
+              <small>Jardín Frontal</small>
+              <h3>${zone.name}</h3>
+            </span>
+          </div>
+
+          <span class="state-badge" id="zone-badge-${zone.id}">
+            <span aria-hidden="true"></span>
+            Desconocido
+          </span>
+        </div>
+
+        ${sprinklerMarkup()}
+
+        <div class="device-status">
+          <p id="zone-status-${zone.id}">Conecta el panel para consultar el estado.</p>
+          <time id="last-update-${zone.id}" datetime="">Sin datos todavía</time>
+        </div>
+
+        <button class="action-button zone-action" type="button" data-zone="${zone.id}" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a8 8 0 0 0 0-16M12 2v10l4 2" /></svg>
+          <span>Encender</span>
+        </button>
+      </article>`,
+  ).join("");
+}
 
 function getSessionConfig() {
   try {
@@ -71,29 +130,50 @@ function setConnectionStatus(status, label) {
   };
 
   elements.systemSummary.textContent = summaries[status] || summaries.idle;
-  const enabled = status === "connected";
-  elements.turnOn.disabled = !enabled;
-  elements.turnOff.disabled = !enabled;
+  document.querySelectorAll(".zone-action").forEach((button) => {
+    button.disabled = status !== "connected";
+  });
 }
 
-function setZoneState(rawState) {
+function updateActionButton(zoneId, state) {
+  const button = document.querySelector(`.zone-action[data-zone="${zoneId}"]`);
+  const label = button.querySelector("span");
+  const path = button.querySelector("path");
+  const isOn = state === "on";
+
+  button.dataset.command = isOn ? "OFF" : "ON";
+  button.classList.toggle("action-button--off", isOn);
+  button.classList.toggle("action-button--on", !isOn);
+  label.textContent = isOn ? "Apagar" : "Encender";
+  path.setAttribute("d", isOn ? "M18.4 6.3a8 8 0 1 1-12.8 0M12 3v9" : "M12 21a8 8 0 0 0 0-16M12 2v10l4 2");
+}
+
+function setZoneState(zoneId, rawState) {
   const state = rawState.trim().toUpperCase();
+  const card = document.querySelector(`#zone-card-${zoneId}`);
+  const badge = document.querySelector(`#zone-badge-${zoneId}`);
+  const status = document.querySelector(`#zone-status-${zoneId}`);
+  const lastUpdate = document.querySelector(`#last-update-${zoneId}`);
   const timestamp = new Date();
 
   if (state === "ON") {
-    elements.zoneCard.dataset.state = "on";
-    elements.zoneBadge.innerHTML = '<span aria-hidden="true"></span>Regando';
-    elements.zoneStatus.textContent = "La válvula está abierta y la zona se está regando.";
+    zoneStates.set(zoneId, "on");
+    card.dataset.state = "on";
+    badge.innerHTML = '<span aria-hidden="true"></span>Regando';
+    status.textContent = "La válvula está abierta y la zona se está regando.";
+    updateActionButton(zoneId, "on");
   } else if (state === "OFF") {
-    elements.zoneCard.dataset.state = "off";
-    elements.zoneBadge.innerHTML = '<span aria-hidden="true"></span>Apagado';
-    elements.zoneStatus.textContent = "La válvula está cerrada. El jardín está en reposo.";
+    zoneStates.set(zoneId, "off");
+    card.dataset.state = "off";
+    badge.innerHTML = '<span aria-hidden="true"></span>Apagado';
+    status.textContent = "La válvula está cerrada. La zona está en reposo.";
+    updateActionButton(zoneId, "off");
   } else {
     return;
   }
 
-  elements.lastUpdate.dateTime = timestamp.toISOString();
-  elements.lastUpdate.textContent = `Actualizado a las ${timestamp.toLocaleTimeString("es-ES", {
+  lastUpdate.dateTime = timestamp.toISOString();
+  lastUpdate.textContent = `Actualizado a las ${timestamp.toLocaleTimeString("es-ES", {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
@@ -125,13 +205,10 @@ function connectMqtt(config) {
   elements.formError.textContent = "";
   elements.connectButton.disabled = true;
 
-  const brokerUrl = `wss://${config.host}:${config.port}/mqtt`;
-  const clientId = `riego-web-${crypto.randomUUID?.() || Math.random().toString(16).slice(2)}`;
-
-  client = mqtt.connect(brokerUrl, {
+  client = mqtt.connect(`wss://${config.host}:${config.port}/mqtt`, {
     username: config.username,
     password: config.password,
-    clientId,
+    clientId: `riego-web-${crypto.randomUUID?.() || Math.random().toString(16).slice(2)}`,
     clean: true,
     connectTimeout: 10_000,
     reconnectPeriod: 4_000,
@@ -145,29 +222,22 @@ function connectMqtt(config) {
     elements.connectButton.disabled = false;
     elements.dialog.close();
 
-    client.subscribe(MQTT_DEFAULTS.stateTopic, { qos: 1 }, (error) => {
-      if (error) {
-        showToast("No se pudo escuchar el estado de la zona.");
-        return;
-      }
-      showToast("Panel conectado a HiveMQ");
-    });
+    client.subscribe(
+      ZONES.map((zone) => zone.stateTopic),
+      { qos: 1 },
+      (error) => {
+        showToast(error ? "No se pudo escuchar el estado de las zonas." : "Panel conectado a HiveMQ");
+      },
+    );
   });
 
   client.on("message", (topic, payload) => {
-    if (topic === MQTT_DEFAULTS.stateTopic) {
-      setZoneState(payload.toString());
-    }
+    const zone = ZONES.find((item) => item.stateTopic === topic);
+    if (zone) setZoneState(zone.id, payload.toString());
   });
 
-  client.on("reconnect", () => {
-    setConnectionStatus("connecting", "Reconectando…");
-  });
-
-  client.on("offline", () => {
-    setConnectionStatus("error", "Sin conexión");
-  });
-
+  client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));
+  client.on("offline", () => setConnectionStatus("error", "Sin conexión"));
   client.on("error", (error) => {
     console.error("Error MQTT:", error);
     elements.connectButton.disabled = false;
@@ -176,25 +246,40 @@ function connectMqtt(config) {
   });
 }
 
-function publishCommand(command) {
-  if (!client?.connected) {
+function publishCommand(zoneId, command) {
+  const zone = ZONES.find((item) => item.id === zoneId);
+
+  if (!client?.connected || !zone) {
     showToast("El panel no está conectado.");
     return;
   }
 
-  client.publish(MQTT_DEFAULTS.commandTopic, command, { qos: 1, retain: false }, (error) => {
+  client.publish(zone.commandTopic, command, { qos: 1, retain: false }, (error) => {
     if (error) {
-      showToast("No se pudo enviar el comando.");
+      showToast(`No se pudo enviar el comando a ${zone.name}.`);
       return;
     }
 
-    showToast(command === "ON" ? "Orden de encendido enviada" : "Orden de apagado enviada");
+    showToast(`${zone.name}: orden de ${command === "ON" ? "encendido" : "apagado"} enviada`);
   });
 }
 
+renderZones();
+populateSettings();
+setConnectionStatus("idle", "Configurar");
+
+elements.zonesGrid.addEventListener("click", (event) => {
+  const button = event.target.closest(".zone-action");
+  if (!button) return;
+
+  const zoneId = Number(button.dataset.zone);
+  const currentState = zoneStates.get(zoneId);
+  const command = currentState === "on" ? "OFF" : "ON";
+  publishCommand(zoneId, command);
+});
+
 elements.connectionButton.addEventListener("click", () => elements.dialog.showModal());
 elements.closeSettings.addEventListener("click", () => elements.dialog.close());
-
 elements.dialog.addEventListener("click", (event) => {
   if (event.target === elements.dialog) elements.dialog.close();
 });
@@ -220,13 +305,7 @@ elements.form.addEventListener("submit", (event) => {
   connectMqtt(config);
 });
 
-elements.turnOn.addEventListener("click", () => publishCommand("ON"));
-elements.turnOff.addEventListener("click", () => publishCommand("OFF"));
-
 window.addEventListener("beforeunload", disconnectCurrentClient);
-
-populateSettings();
-setConnectionStatus("idle", "Configurar");
 
 const savedConfig = getSessionConfig();
 if (savedConfig.password) {

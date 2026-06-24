@@ -1,8 +1,10 @@
-const CACHE_NAME = "control-cc2-v2";
+const CACHE_NAME = "control-cc2-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
+  "./jardin-frontal.html",
   "./style.css",
+  "./home.js",
   "./app.js",
   "./manifest.json",
   "./icon-192.png",

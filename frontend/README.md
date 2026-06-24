@@ -1,6 +1,6 @@
 # Frontend · Control-CC2
 
-Panel web instalable para controlar la Zona 1 mediante MQTT y HiveMQ Cloud.
+Panel web instalable para acceder a las zonas de la casa y controlar las cuatro áreas de riego del Jardín Frontal mediante MQTT y HiveMQ Cloud.
 
 ## 1. Probar la interfaz en el ordenador
 
@@ -52,8 +52,8 @@ La web utiliza:
 
 | Función | Topic o mensaje |
 | --- | --- |
-| Recibir el estado | `riego/zona1/state` |
-| Enviar comandos | `riego/zona1/cmd` |
+| Recibir el estado | `riego/zona1/state` hasta `riego/zona4/state` |
+| Enviar comandos | `riego/zona1/cmd` hasta `riego/zona4/cmd` |
 | Abrir la válvula | `ON` |
 | Cerrar la válvula | `OFF` |
 
@@ -61,12 +61,12 @@ Para probar el sistema completo:
 
 1. Enciende el ESP32 y comprueba en el monitor serie que se conecta al Wi-Fi y a HiveMQ.
 2. Abre la web y conecta el panel.
-3. Pulsa **Encender**.
+3. Entra en **Jardín Frontal** y pulsa **Encender** en una zona.
 4. El ESP32 debería activar el GPIO 2 y publicar `ON` en el topic de estado.
 5. La tarjeta de la web debería cambiar a **Regando**.
 6. Pulsa **Apagar** y comprueba que vuelve a **Apagado**.
 
-Si la web conecta pero el dispositivo no responde, revisa que el ESP32 y la web utilicen exactamente los mismos topics.
+Si la web conecta pero el dispositivo no responde, revisa que el ESP32 y la web utilicen exactamente los mismos topics. El firmware debe implementar los topics de las zonas 2, 3 y 4 para que sus tarjetas controlen dispositivos reales.
 
 ## 3. Publicar rápidamente con Netlify
 
@@ -148,7 +148,7 @@ Los controles solo se habilitan cuando la etiqueta superior muestra **En línea*
 
 ### La web no refleja el estado
 
-- El ESP32 debe publicar en `riego/zona1/state`.
+- El ESP32 debe publicar en el topic de estado correspondiente, desde `riego/zona1/state` hasta `riego/zona4/state`.
 - El mensaje debe ser exactamente `ON` u `OFF`.
 - El firmware publica el estado después de recibir un comando.
 
@@ -162,5 +162,5 @@ La contraseña se guarda únicamente en `sessionStorage` y desaparece al cerrar 
 
 Una web estática no puede esconder credenciales incluidas en JavaScript. Para un despliegue público conviene crear en HiveMQ un usuario exclusivo para la web, con permisos limitados a:
 
-- Suscripción a `riego/zona1/state`.
-- Publicación en `riego/zona1/cmd`.
+- Suscripción a `riego/zona1/state` hasta `riego/zona4/state`.
+- Publicación en `riego/zona1/cmd` hasta `riego/zona4/cmd`.

@@ -90,8 +90,10 @@ svg {
 
 .topbar,
 .brand,
+.back-link,
 .connection-pill,
 .hero,
+.garden-hero,
 .summary-grid,
 .metric,
 .section-heading,
@@ -139,6 +141,20 @@ svg {
 .brand small {
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.back-link {
+  min-height: 42px;
+  gap: 7px;
+  color: #c4d2cd;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.back-link svg {
+  width: 20px;
+  height: 20px;
 }
 
 .connection-pill {
@@ -223,6 +239,163 @@ svg {
   line-height: 1.65;
 }
 
+.home-hero {
+  max-width: 720px;
+  padding: clamp(72px, 12vw, 130px) 0 60px;
+}
+
+.home-hero h1,
+.garden-hero h1 {
+  margin: 0;
+  font-family: "Manrope", sans-serif;
+  font-size: clamp(2.6rem, 7vw, 5.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.07em;
+}
+
+.home-hero > p:last-child,
+.garden-hero > div > p:last-child {
+  max-width: 480px;
+  margin: 20px 0 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.spaces-section {
+  width: min(100%, 920px);
+  margin: 0 auto;
+}
+
+.spaces-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 18px;
+}
+
+.space-card {
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(212, 240, 228, 0.12);
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgba(31, 62, 52, 0.82), rgba(14, 31, 26, 0.95));
+  color: inherit;
+  text-decoration: none;
+  box-shadow: var(--shadow);
+  transition: transform 180ms ease, border-color 180ms ease;
+}
+
+.space-card:hover {
+  border-color: rgba(96, 232, 157, 0.28);
+  transform: translateY(-4px);
+}
+
+.space-card:active {
+  transform: scale(0.99);
+}
+
+.space-card__visual {
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 78% 24%, rgba(238, 245, 207, 0.16), transparent 16%),
+    linear-gradient(160deg, rgba(82, 216, 230, 0.12), transparent 60%);
+}
+
+.space-card__visual svg {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.space-card__sun {
+  position: absolute;
+  top: 34px;
+  right: 50px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--cream);
+  box-shadow: 0 0 45px rgba(238, 245, 207, 0.2);
+}
+
+.space-card__ground {
+  fill: rgba(49, 120, 83, 0.42);
+  stroke: rgba(96, 232, 157, 0.25);
+}
+
+.space-card__plant {
+  fill: rgba(96, 232, 157, 0.28);
+  stroke: var(--green);
+  stroke-width: 3;
+}
+
+.space-card__water {
+  stroke: var(--aqua);
+  stroke-dasharray: 4 8;
+  stroke-width: 3;
+  opacity: 0.6;
+}
+
+.space-card__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px;
+}
+
+.space-card__content small {
+  color: var(--green);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.space-card__content h3 {
+  margin: 4px 0;
+  font-family: "Manrope", sans-serif;
+  font-size: 1.45rem;
+  letter-spacing: -0.04em;
+}
+
+.space-card__content p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.space-card__arrow {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--green);
+  color: #092319;
+}
+
+.space-card__arrow svg {
+  width: 20px;
+  height: 20px;
+}
+
+.garden-hero {
+  justify-content: space-between;
+  gap: 40px;
+  padding: clamp(58px, 9vw, 95px) 0 48px;
+}
+
+.garden-connection {
+  max-width: 280px;
+  flex: 0 1 280px;
+}
+
 .summary-grid {
   align-items: stretch;
   gap: 14px;
@@ -286,6 +459,16 @@ svg {
   margin: 0 auto;
 }
 
+.devices-section--wide {
+  width: 100%;
+}
+
+.zones-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
 .section-heading {
   justify-content: space-between;
   margin-bottom: 20px;
@@ -318,6 +501,10 @@ svg {
     var(--surface-solid);
   box-shadow: var(--shadow);
   isolation: isolate;
+}
+
+.zones-grid .device-card {
+  padding: clamp(18px, 3vw, 28px);
 }
 
 .device-card::before {
@@ -399,6 +586,10 @@ svg {
   display: grid;
   min-height: 210px;
   place-items: center;
+}
+
+.zones-grid .device-visual {
+  min-height: 185px;
 }
 
 .sprinkler {
@@ -494,6 +685,10 @@ svg {
   font-weight: 700;
   cursor: pointer;
   transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, opacity 160ms ease;
+}
+
+.zone-action {
+  width: 100%;
 }
 
 .action-button svg {
@@ -712,6 +907,24 @@ svg {
   .hero {
     display: block;
     padding: 58px 0 34px;
+  }
+
+  .home-hero {
+    padding: 58px 0 42px;
+  }
+
+  .garden-hero {
+    display: block;
+    padding: 54px 0 38px;
+  }
+
+  .garden-connection {
+    max-width: none;
+    margin-top: 24px;
+  }
+
+  .zones-grid {
+    grid-template-columns: 1fr;
   }
 
   .hero__copy {
