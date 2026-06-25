@@ -1,4 +1,4 @@
-const CACHE_NAME = "control-cc2-v3";
+const CACHE_NAME = "control-cc2-v5";
 const APP_SHELL = [
   "./",
   "./index.html",

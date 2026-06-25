@@ -41,7 +41,7 @@
         <div>
           <p class="eyebrow">Exterior</p>
           <h1 id="page-title">Jardín Frontal</h1>
-          <p>Control independiente de las cuatro zonas de riego.</p>
+          <p>Cada rutina ejecuta un ciclo secuencial de la zona 1 a la 4, sin solapar válvulas.</p>
         </div>
 
         <article class="metric garden-connection">
@@ -55,13 +55,48 @@
         </article>
       </section>
 
+      <section class="program-section" aria-labelledby="program-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Programación</p>
+            <h2 id="program-title">Rutinas de riego</h2>
+          </div>
+          <span class="device-count" id="program-summary">1 rutina</span>
+        </div>
+
+        <form id="program-form">
+          <div class="routines-list" id="routines-list"></div>
+
+          <div class="program-actions">
+            <button class="secondary-button secondary-button--add" id="add-routine" type="button">
+              <span aria-hidden="true">+</span>
+              Añadir rutina
+            </button>
+            <button class="primary-button primary-button--save" type="submit">
+              <span>Guardar todas las rutinas</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9.5 17 19 7.5" /></svg>
+            </button>
+          </div>
+        </form>
+      </section>
+
       <section class="devices-section devices-section--wide" aria-labelledby="devices-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Dispositivos</p>
-            <h2 id="devices-title">Zonas de riego</h2>
+            <p class="eyebrow">Ejecución</p>
+            <h2 id="devices-title">Orden de las zonas</h2>
           </div>
-          <span class="device-count">4 zonas</span>
+          <span class="device-count">Secuencia 1 → 4</span>
+        </div>
+
+        <div class="cycle-controls">
+          <div>
+            <strong id="cycle-status">Ciclo detenido</strong>
+            <span id="cycle-detail">Las válvulas se abrirán de una en una.</span>
+          </div>
+          <div class="cycle-controls__actions">
+            <button class="secondary-button" id="stop-cycle" type="button" disabled>Detener</button>
+          </div>
         </div>
 
         <div class="zones-grid" id="zones-grid"></div>
