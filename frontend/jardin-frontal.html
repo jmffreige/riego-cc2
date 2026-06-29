@@ -44,15 +44,29 @@
           <p>Cada rutina ejecuta un ciclo secuencial de la zona 1 a la 4, sin solapar válvulas.</p>
         </div>
 
-        <article class="metric garden-connection">
-          <span class="metric__icon metric__icon--water" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 2.8s6.4 6.9 6.4 12a6.4 6.4 0 1 1-12.8 0c0-5.1 6.4-12 6.4-12Z" /></svg>
-          </span>
-          <span>
-            <small>Estado general</small>
-            <strong id="system-summary">Esperando conexión</strong>
-          </span>
-        </article>
+        <div class="garden-hero__metrics" aria-label="Estado del programador">
+          <article class="metric garden-connection">
+            <span class="metric__icon metric__icon--water" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 2.8s6.4 6.9 6.4 12a6.4 6.4 0 1 1-12.8 0c0-5.1 6.4-12 6.4-12Z" /></svg>
+            </span>
+            <span>
+              <small>Estado general</small>
+              <strong id="system-summary">Esperando conexión</strong>
+            </span>
+          </article>
+
+          <article class="metric battery-metric" id="battery-metric" data-level="unknown">
+            <span class="metric__icon metric__icon--battery" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 8h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm18 3v2" /></svg>
+            </span>
+            <span>
+              <small>Batería solar</small>
+              <strong id="battery-percent">Sin datos</strong>
+              <span class="battery-meter" aria-hidden="true"><span id="battery-bar"></span></span>
+              <span class="battery-voltage" id="battery-voltage">Esperando telemetría</span>
+            </span>
+          </article>
+        </div>
       </section>
 
       <section class="program-section" aria-labelledby="program-title">

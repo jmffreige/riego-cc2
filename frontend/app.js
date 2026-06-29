@@ -5,6 +5,7 @@ const MQTT_DEFAULTS = Object.freeze({
 });
 
 const PROGRAM_TOPIC = "riego/programacion/cmd";
+const BATTERY_TOPIC = "riego/device/battery";
 const PROGRAM_STORAGE_KEY = "riego-programacion";
 const WEEKDAYS = Object.freeze(["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]);
 const WEEKDAY_OPTIONS = Object.freeze([
@@ -32,6 +33,10 @@ const elements = {
   connectionButton: document.querySelector("#open-settings"),
   connectionLabel: document.querySelector("#connection-label"),
   systemSummary: document.querySelector("#system-summary"),
+  batteryMetric: document.querySelector("#battery-metric"),
+  batteryPercent: document.querySelector("#battery-percent"),
+  batteryBar: document.querySelector("#battery-bar"),
+  batteryVoltage: document.querySelector("#battery-voltage"),
   zonesGrid: document.querySelector("#zones-grid"),
   programForm: document.querySelector("#program-form"),
   programSummary: document.querySelector("#program-summary"),
@@ -431,6 +436,46 @@ function setZoneState(zoneId, rawState) {
       : '<span aria-hidden="true"></span>En espera';
 }
 
+function parseBatteryPayload(rawPayload) {
+  const payload = rawPayload.trim();
+  if (!payload) return null;
+
+  try {
+    const data = JSON.parse(payload);
+    const percent = Number(data.percent);
+    const voltage = Number(data.voltage);
+    if (Number.isFinite(percent)) {
+      return {
+        percent: Math.min(100, Math.max(0, Math.round(percent))),
+        voltage: Number.isFinite(voltage) ? voltage : null,
+      };
+    }
+  } catch {
+    // Se permite tambien publicar solo el porcentaje durante pruebas manuales.
+  }
+
+  const percent = Number(payload);
+  if (!Number.isFinite(percent)) return null;
+  return {
+    percent: Math.min(100, Math.max(0, Math.round(percent))),
+    voltage: null,
+  };
+}
+
+function setBatteryState(rawPayload) {
+  const battery = parseBatteryPayload(rawPayload);
+  if (!battery) return;
+
+  elements.batteryPercent.textContent = `${battery.percent}%`;
+  elements.batteryBar.style.width = `${battery.percent}%`;
+  elements.batteryVoltage.textContent = battery.voltage === null
+    ? "Voltaje no disponible"
+    : `${battery.voltage.toFixed(2)} V`;
+
+  const level = battery.percent <= 20 ? "low" : battery.percent <= 45 ? "medium" : "high";
+  elements.batteryMetric.dataset.level = level;
+}
+
 function showToast(message) {
   clearTimeout(toastTimer);
   elements.toast.textContent = message;
@@ -474,15 +519,16 @@ function connectMqtt(config) {
     elements.connectButton.disabled = false;
     elements.dialog.close();
     client.subscribe(
-      ZONES.map((zone) => zone.stateTopic),
+      [...ZONES.map((zone) => zone.stateTopic), BATTERY_TOPIC],
       { qos: 1 },
-      (error) => showToast(error ? "No se pudo consultar el estado de las zonas." : "Programador conectado"),
+      (error) => showToast(error ? "No se pudo consultar el estado del programador." : "Programador conectado"),
     );
   });
 
   client.on("message", (topic, payload) => {
     const zone = ZONES.find((item) => item.stateTopic === topic);
     if (zone) setZoneState(zone.id, payload.toString());
+    if (topic === BATTERY_TOPIC) setBatteryState(payload.toString());
   });
   client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));
   client.on("offline", () => setConnectionStatus("error", "Sin conexión"));
@@ -509,7 +555,9 @@ function publish(topic, payload, options = {}) {
 
 async function closeAllZones(exceptZoneId = null) {
   await Promise.all(
-    ZONES.filter((zone) => zone.id !== exceptZoneId).map((zone) => publish(zone.commandTopic, "OFF")),
+    ZONES.filter((zone) => zone.id !== exceptZoneId).map((zone) =>
+      publish(zone.commandTopic, "OFF", { retain: true }),
+    ),
   );
 }
 
@@ -560,7 +608,7 @@ async function runZone(routine, index) {
 
   try {
     await closeAllZones(zone.id);
-    await publish(zone.commandTopic, "ON");
+    await publish(zone.commandTopic, "ON", { retain: true });
     activeZoneId = zone.id;
     elements.cycleStatus.textContent = `${routine.name} · Regando ${zone.name}`;
     elements.cycleDetail.textContent = ZONES[index + 1]
@@ -568,7 +616,7 @@ async function runZone(routine, index) {
       : `${duration} min · última zona del ciclo.`;
     cycleTimer = setTimeout(async () => {
       try {
-        await publish(zone.commandTopic, "OFF");
+        await publish(zone.commandTopic, "OFF", { retain: true });
         runZone(routine, index + 1);
       } catch {
         stopCycle("Ciclo interrumpido");
@@ -671,7 +719,7 @@ elements.settingsForm.addEventListener("submit", (event) => {
 
 window.addEventListener("beforeunload", () => {
   if (cycleRunning && activeZoneId) {
-    client?.publish(ZONES[activeZoneId - 1].commandTopic, "OFF", { qos: 1, retain: false });
+    client?.publish(ZONES[activeZoneId - 1].commandTopic, "OFF", { qos: 1, retain: true });
   }
   disconnectCurrentClient();
 });
