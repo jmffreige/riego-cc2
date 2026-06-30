@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <esp_sleep.h>
 #include <cstring>
@@ -10,6 +11,7 @@
 namespace {
 
 constexpr uint8_t ZONE_COUNT = 4;
+constexpr uint8_t MAX_ROUTINE_STEPS = 8;
 constexpr uint8_t BATTERY_PIN = 35;
 constexpr uint16_t VALVE_PULSE_MS = 50;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
@@ -32,6 +34,20 @@ struct ValveZone {
   const char* stateTopic;
 };
 
+struct RoutineStep {
+  uint8_t zoneIndex;
+  uint16_t durationMinutes;
+};
+
+struct RoutineRuntime {
+  bool active;
+  uint32_t id;
+  uint8_t stepCount;
+  uint8_t currentStepIndex;
+  int8_t openZoneIndex;
+  RoutineStep steps[MAX_ROUTINE_STEPS];
+};
+
 const ValveZone zones[ZONE_COUNT] = {
   {4, 16, "riego/zona1/cmd", "riego/zona1/state"},
   {17, 18, "riego/zona2/cmd", "riego/zona2/state"},
@@ -39,6 +55,8 @@ const ValveZone zones[ZONE_COUNT] = {
   {22, 23, "riego/zona4/cmd", "riego/zona4/state"},
 };
 
+const char* ROUTINE_CONFIG_TOPIC = "riego/routine/config";
+const char* ROUTINE_STATE_TOPIC = "riego/routine/state";
 const char* BATTERY_TOPIC = "riego/device/battery";
 const char* STATUS_TOPIC = "riego/device/status";
 const char* CLIENT_ID = "ESP32_Riegos_CC2";
@@ -47,6 +65,11 @@ WiFiClientSecure secureClient;
 PubSubClient mqtt(secureClient);
 
 RTC_DATA_ATTR int8_t lastAppliedState[ZONE_COUNT] = {-1, -1, -1, -1};
+RTC_DATA_ATTR RoutineRuntime routine = {false, 0, 0, 0, -1, {}};
+RTC_DATA_ATTR uint32_t completedRoutineId = 0;
+
+uint64_t nextSleepMinutes = DEFAULT_SLEEP_MINUTES;
+bool routineFinishedThisWake = false;
 
 void setAllValvePinsLow() {
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
@@ -112,7 +135,168 @@ void publishZoneState(uint8_t zoneIndex, bool isOpen) {
   mqtt.publish(zones[zoneIndex].stateTopic, isOpen ? "ON" : "OFF", true);
 }
 
+void publishRoutineState(const char* status) {
+  if (!mqtt.connected()) {
+    return;
+  }
+
+  char payload[160] = {};
+  const int8_t openZone = routine.openZoneIndex >= 0 ? routine.openZoneIndex + 1 : 0;
+  snprintf(payload, sizeof(payload),
+           "{\"status\":\"%s\",\"id\":%lu,\"step\":%u,\"stepCount\":%u,\"openZone\":%d,\"nextWakeMinutes\":%llu}",
+           status, static_cast<unsigned long>(routine.id), routine.currentStepIndex + 1, routine.stepCount, openZone,
+           nextSleepMinutes);
+  mqtt.publish(ROUTINE_STATE_TOPIC, payload, true);
+}
+
+void closeRoutineOpenZone() {
+  if (routine.openZoneIndex < 0 || routine.openZoneIndex >= ZONE_COUNT) {
+    routine.openZoneIndex = -1;
+    return;
+  }
+
+  const uint8_t zoneIndex = static_cast<uint8_t>(routine.openZoneIndex);
+  pulseValve(zoneIndex, false);
+  publishZoneState(zoneIndex, false);
+  routine.openZoneIndex = -1;
+}
+
+void clearRoutine(bool resetSummary = true) {
+  routine.active = false;
+  routine.openZoneIndex = -1;
+  if (resetSummary) {
+    routine.stepCount = 0;
+    routine.currentStepIndex = 0;
+  }
+  nextSleepMinutes = DEFAULT_SLEEP_MINUTES;
+}
+
+void startRoutineStep(uint8_t stepIndex) {
+  if (stepIndex >= routine.stepCount) {
+    completedRoutineId = routine.id;
+    routineFinishedThisWake = true;
+    clearRoutine(false);
+    publishRoutineState("finished");
+    return;
+  }
+
+  routine.currentStepIndex = stepIndex;
+  const RoutineStep& step = routine.steps[stepIndex];
+  pulseValve(step.zoneIndex, true);
+  publishZoneState(step.zoneIndex, true);
+  routine.openZoneIndex = static_cast<int8_t>(step.zoneIndex);
+  nextSleepMinutes = step.durationMinutes;
+  publishRoutineState("watering");
+}
+
+void advanceRoutineAfterSleep() {
+  if (!routine.active) {
+    return;
+  }
+
+  Serial.println("Rutina activa: cambio de zona programado");
+  closeRoutineOpenZone();
+
+  const uint8_t nextStepIndex = routine.currentStepIndex + 1;
+  if (nextStepIndex >= routine.stepCount) {
+    Serial.println("Rutina finalizada");
+    completedRoutineId = routine.id;
+    routineFinishedThisWake = true;
+    clearRoutine(false);
+    publishRoutineState("finished");
+    return;
+  }
+
+  startRoutineStep(nextStepIndex);
+}
+
+void applyRoutineConfig(const byte* payload, unsigned int length) {
+  StaticJsonDocument<768> doc;
+  const DeserializationError error = deserializeJson(doc, payload, length);
+  if (error) {
+    Serial.printf("Rutina ignorada: JSON no valido (%s)\n", error.c_str());
+    return;
+  }
+
+  const bool enabled = doc["enabled"] | false;
+  if (!enabled) {
+    Serial.println("Rutina desactivada por MQTT");
+    closeRoutineOpenZone();
+    clearRoutine();
+    completedRoutineId = 0;
+    routineFinishedThisWake = false;
+    publishRoutineState("disabled");
+    return;
+  }
+
+  if (doc["id"].isNull()) {
+    Serial.println("Rutina ignorada: falta id");
+    return;
+  }
+
+  const uint32_t id = doc["id"].as<uint32_t>();
+  if (id == 0) {
+    Serial.println("Rutina ignorada: id debe ser mayor que 0");
+    return;
+  }
+
+  if (routine.active && routine.id == id) {
+    Serial.printf("Rutina %lu ya esta en curso; se conserva el progreso\n", static_cast<unsigned long>(id));
+    publishRoutineState("watering");
+    return;
+  }
+
+  if (!routine.active && completedRoutineId == id) {
+    Serial.printf("Rutina %lu ya fue completada; esperando un id nuevo\n", static_cast<unsigned long>(id));
+    publishRoutineState("finished");
+    return;
+  }
+
+  JsonArray steps = doc["steps"].as<JsonArray>();
+  if (steps.isNull() || steps.size() == 0 || steps.size() > MAX_ROUTINE_STEPS) {
+    Serial.println("Rutina ignorada: numero de pasos no valido");
+    return;
+  }
+
+  RoutineStep parsedSteps[MAX_ROUTINE_STEPS] = {};
+  uint8_t parsedCount = 0;
+  for (JsonObject step : steps) {
+    const int zone = step["zone"] | 0;
+    int minutes = step["minutes"] | 0;
+    if (minutes == 0) {
+      minutes = step["durationMinutes"] | 0;
+    }
+    if (zone < 1 || zone > ZONE_COUNT || minutes < 1 || minutes > 1440) {
+      Serial.println("Rutina ignorada: paso no valido");
+      return;
+    }
+
+    parsedSteps[parsedCount++] = {static_cast<uint8_t>(zone - 1), static_cast<uint16_t>(minutes)};
+  }
+
+  Serial.printf("Rutina %lu recibida: %u pasos\n", static_cast<unsigned long>(id), parsedCount);
+  closeRoutineOpenZone();
+
+  routine.active = true;
+  routine.id = id;
+  completedRoutineId = 0;
+  routineFinishedThisWake = false;
+  routine.stepCount = parsedCount;
+  routine.currentStepIndex = 0;
+  routine.openZoneIndex = -1;
+  for (uint8_t i = 0; i < parsedCount; ++i) {
+    routine.steps[i] = parsedSteps[i];
+  }
+
+  startRoutineStep(0);
+}
+
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  if (strcmp(topic, ROUTINE_CONFIG_TOPIC) == 0) {
+    applyRoutineConfig(payload, length);
+    return;
+  }
+
   bool desiredOpen = false;
   if (!payloadToDesiredState(payload, length, desiredOpen)) {
     Serial.printf("Mensaje ignorado en %s: comando no valido\n", topic);
@@ -121,6 +305,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
     if (strcmp(topic, zones[i].commandTopic) == 0) {
+      if (routine.active) {
+        Serial.printf("Comando manual ignorado en zona %u: rutina activa\n", i + 1);
+        publishZoneState(i, lastAppliedState[i] == 1);
+        return;
+      }
+
       const int8_t desiredState = desiredOpen ? 1 : 0;
       if (lastAppliedState[i] != desiredState) {
         pulseValve(i, desiredOpen);
@@ -160,6 +350,7 @@ bool connectWiFi() {
 bool connectMqtt() {
   secureClient.setInsecure();
   mqtt.setServer(mqtt_server, mqtt_port);
+  mqtt.setBufferSize(768);
   mqtt.setCallback(mqttCallback);
   mqtt.setKeepAlive(15);
   mqtt.setSocketTimeout(5);
@@ -181,6 +372,7 @@ bool connectMqtt() {
   }
 
   mqtt.publish(STATUS_TOPIC, "online", true);
+  mqtt.subscribe(ROUTINE_CONFIG_TOPIC, 1);
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
     mqtt.subscribe(zones[i].commandTopic, 1);
   }
@@ -232,7 +424,7 @@ void waitForRetainedCommands() {
   }
 }
 
-void goToSleep() {
+void goToSleep(uint64_t sleepMinutes) {
   setAllValvePinsLow();
 
   if (mqtt.connected()) {
@@ -244,9 +436,9 @@ void goToSleep() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 
-  Serial.printf("Deep sleep durante %llu minutos\n", DEFAULT_SLEEP_MINUTES);
+  Serial.printf("Deep sleep durante %llu minutos\n", sleepMinutes);
   Serial.flush();
-  esp_sleep_enable_timer_wakeup(DEFAULT_SLEEP_MINUTES * US_PER_MINUTE);
+  esp_sleep_enable_timer_wakeup(sleepMinutes * US_PER_MINUTE);
   esp_deep_sleep_start();
 }
 
@@ -260,12 +452,17 @@ void setup() {
 
   configureValvePins();
 
+  if (routine.active) {
+    advanceRoutineAfterSleep();
+  }
+
   if (connectWiFi() && connectMqtt()) {
     publishBattery();
+    publishRoutineState(routine.active ? "watering" : (routineFinishedThisWake ? "finished" : "idle"));
     waitForRetainedCommands();
   }
 
-  goToSleep();
+  goToSleep(nextSleepMinutes);
 }
 
 void loop() {
