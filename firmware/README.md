@@ -6,9 +6,10 @@ lee comandos MQTT retenidos desde HiveMQ, acciona electroválvulas latching Rain
 Bird mediante puentes H DRV8833, publica telemetría de batería y vuelve a deep
 sleep para reducir el consumo.
 
-Además puede ejecutar rutinas de riego completas en el propio ESP32: abre una
-zona, duerme exactamente los minutos configurados, despierta, cierra esa zona,
-abre la siguiente y repite hasta terminar.
+Además puede ejecutar rutinas de riego completas en el propio ESP32. La PWA
+publica una programación retenida con días, hora de inicio y duración por zona;
+el controlador despierta cada 5 minutos por defecto, pero acorta ese deep sleep
+cuando detecta una rutina que debe empezar antes del siguiente ciclo.
 
 ## Arquitectura
 
@@ -46,15 +47,59 @@ estado pero no repite el pulso en cada despertar.
 Cuando hay una rutina activa, los comandos manuales de zona se ignoran para
 evitar conflictos con la secuencia programada.
 
-## Rutinas de riego
+## Programación de riego
 
-La PWA debe publicar la rutina activa en `riego/routine/config` con
-`retain: true`. El campo `id` funciona como revision de la rutina: si la rutina
-termina, el ESP32 no la vuelve a ejecutar mientras el mensaje retenido conserve
-el mismo `id`. Para lanzarla de nuevo, publicar la misma rutina con un `id`
-nuevo.
+La PWA publica la programación completa en `riego/programacion/cmd` con
+`retain: true`. El firmware conserva hasta 8 rutinas activas en memoria RTC y
+las vuelve a evaluar en cada despertar.
 
-Ejemplo: zona 1 durante 5 minutos y zona 2 durante 12 minutos:
+Ejemplo: una rutina diaria a las 07:00:
+
+```json
+{
+  "version": 2,
+  "routines": [
+    {
+      "id": "routine-manana",
+      "name": "Mañana",
+      "enabled": true,
+      "dayMode": "daily",
+      "days": [],
+      "startTime": "07:00",
+      "durations": [10, 8, 12, 5]
+    }
+  ]
+}
+```
+
+Formato:
+
+- `version`: versión del formato publicado por la PWA.
+- `routines`: lista de rutinas; el firmware usa como máximo las 8 primeras
+  rutinas activas y válidas.
+- `id`: identificador de la rutina.
+- `name`: nombre descriptivo, usado también para detectar cambios de revisión.
+- `enabled`: `true` para programarla; `false` para ignorarla o detenerla si era
+  la rutina en curso.
+- `dayMode`: `daily` para todos los días o `selected` para usar `days`.
+- `days`: días de la semana cuando `dayMode` es `selected`, con `0` domingo,
+  `1` lunes ... `6` sábado.
+- `startTime`: hora local de inicio en formato `HH:MM`.
+- `durations`: minutos por zona, en orden zona 1 a zona 4. Un `0` omite esa
+  zona. Cada duración debe estar entre `0` y `180`, y al menos una zona debe
+  tener más de `0` minutos.
+
+La hora local se sincroniza por NTP y usa zona horaria de España peninsular:
+`CET-1CEST,M3.5.0/2,M10.5.0/3`.
+
+Para cancelar o modificar una rutina programada, publicar de nuevo
+`riego/programacion/cmd` con esa rutina desactivada, eliminada o cambiada. Si
+hay una rutina en curso y el firmware detecta que ya no coincide con la
+programación retenida, cierra la zona abierta y no continúa con el siguiente
+paso.
+
+El topic antiguo `riego/routine/config` sigue existiendo para pruebas manuales
+de una rutina inmediata:
 
 ```json
 {
@@ -67,25 +112,11 @@ Ejemplo: zona 1 durante 5 minutos y zona 2 durante 12 minutos:
 }
 ```
 
-Formato:
-
-- `enabled`: `true` para iniciar o mantener una rutina; `false` para cancelar.
-- `id`: entero mayor que `0`. Debe cambiar cada vez que se quiera ejecutar una
-  rutina nueva o repetir una ya terminada.
-- `steps`: lista de 1 a 8 pasos.
-- `zone`: zona entre `1` y `4`.
-- `minutes`: duracion del paso, entre `1` y `1440` minutos.
-
-Tambien se acepta `durationMinutes` en lugar de `minutes`.
-
-Para cancelar una rutina en curso, publicar:
+Para cancelar esa rutina inmediata, publicar en `riego/routine/config`:
 
 ```json
 { "enabled": false }
 ```
-
-Si se cancela mientras una zona esta abierta, el ESP32 la cierra en cuanto
-recibe el mensaje.
 
 ## Topics MQTT
 
@@ -93,7 +124,8 @@ La PWA debe publicar comandos con `retain: true`.
 
 | Función | Topic | Payload aceptado |
 | --- | --- | --- |
-| Rutina activa | `riego/routine/config` | JSON retenido |
+| Programación | `riego/programacion/cmd` | JSON retenido |
+| Rutina inmediata/manual | `riego/routine/config` | JSON retenido |
 | Estado de rutina | `riego/routine/state` | JSON retenido |
 | Comando zona 1 | `riego/zona1/cmd` | `ON`, `OFF`, `open`, `close`, `abrir`, `cerrar`, `1`, `0`, `true`, `false` |
 | Comando zona 2 | `riego/zona2/cmd` | Igual |
@@ -105,6 +137,8 @@ La PWA debe publicar comandos con `retain: true`.
 | Estado zona 4 | `riego/zona4/state` | `ON` / `OFF`, retenido |
 | Batería | `riego/device/battery` | JSON retenido |
 | Estado dispositivo | `riego/device/status` | `online`, `sleeping`, `offline` |
+| Próximo despertar | `riego/device/sleep` | JSON retenido |
+| Incidencia de conexión | `riego/device/problem` | JSON retenido |
 
 Ejemplo de telemetría de batería:
 
@@ -112,18 +146,65 @@ Ejemplo de telemetría de batería:
 {"voltage":3.91,"percent":71}
 ```
 
+Ejemplo de próximo despertar:
+
+```json
+{"sleepSeconds":300,"publishedAtEpoch":1782896400,"wakeAtEpoch":1782896700,"reason":"poll","routineActive":false}
+```
+
+Campos de `riego/device/sleep`:
+
+- `sleepSeconds`: duración de deep sleep que el ESP32 acaba de programar.
+- `publishedAtEpoch`: instante Unix en segundos cuando se publicó el mensaje,
+  o `null` si no se pudo sincronizar NTP.
+- `wakeAtEpoch`: instante Unix estimado del próximo despertar, o `null` sin
+  NTP.
+- `reason`: motivo del despertar previsto: `poll` para el ciclo normal,
+  `scheduled_start` para arrancar una rutina programada, `routine_check` para
+  comprobar cambios durante una zona activa y `routine_step` para pasar al
+  siguiente paso de una rutina en curso.
+- `routineActive`: `true` si queda una rutina local en progreso.
+
+La PWA puede mostrar una cuenta atrás fiable usando `wakeAtEpoch`:
+
+```js
+const secondsLeft = Math.max(0, sleep.wakeAtEpoch - Math.floor(Date.now() / 1000));
+```
+
+Si `wakeAtEpoch` es `null`, el frontend puede usar `sleepSeconds` como contador
+aproximado desde el momento de recepción del mensaje, pero no sabrá cuánto
+tiempo llevaba retenido en MQTT.
+
+Ejemplo de incidencia recuperada:
+
+```json
+{"active":false,"resolved":true,"code":"mqtt_failed","operation":"retained_commands","detail":"No se pudo conectar a MQTT; no se pudieron leer las ordenes retenidas.","count":1,"occurredAtEpoch":1782896400,"retrySeconds":300,"retryAtEpoch":1782896700,"resolvedAtEpoch":1782896712}
+```
+
+El ESP32 guarda estas incidencias en memoria RTC cuando no puede conectar a
+Wi-Fi o MQTT y, por tanto, no puede leer los mensajes retenidos. Si en ese
+momento no tiene conexión, no puede avisar inmediatamente; publica la incidencia
+en `riego/device/problem` en el siguiente contacto MQTT exitoso. La PWA además
+detecta si pasa `wakeAtEpoch` sin recibir una nueva telemetría de sueño y muestra
+un reintento estimado usando el ciclo normal de 5 minutos.
+
 Ejemplo de estado de rutina:
 
 ```json
-{"status":"watering","id":101,"step":1,"stepCount":2,"openZone":1,"nextWakeMinutes":5}
+{"status":"watering","id":101,"step":1,"stepCount":2,"openZone":1,"nextWakeSeconds":300}
 ```
 
 Estados posibles:
 
 - `idle`: no hay rutina activa.
-- `watering`: hay una zona abierta y el ESP32 dormira hasta el siguiente paso.
+- `scheduled`: hay una rutina programada antes del siguiente ciclo y el deep
+  sleep se ha ajustado para despertar unos segundos antes de su hora de inicio.
+- `watering`: hay una zona abierta y el ESP32 dormira hasta el siguiente chequeo
+  de 1 minuto o hasta el siguiente paso, lo que llegue antes.
 - `finished`: la rutina termino correctamente.
 - `disabled`: la rutina fue cancelada desde MQTT.
+- `stopped`: la rutina en curso se detuvo porque la programación retenida fue
+  cambiada, desactivada o borrada.
 
 ## Ciclo de deep sleep
 
@@ -131,35 +212,53 @@ El intervalo por defecto, cuando no hay rutina activa, esta definido en
 `src/main.cpp`:
 
 ```cpp
-constexpr uint64_t DEFAULT_SLEEP_MINUTES = 10;
+constexpr uint64_t DEFAULT_SLEEP_MINUTES = 5;
 ```
 
-En cada ciclo:
+En cada ciclo normal:
 
 1. Configura todos los pines de válvulas como salida y los deja en `LOW`.
-2. Si habia una rutina activa antes de dormir, ejecuta inmediatamente el cambio
-   programado: cierra la zona actual y abre la siguiente, o finaliza la rutina.
-3. Conecta a Wi-Fi.
+2. Si había una rutina activa antes de dormir, calcula cuánto le queda a la zona
+   actual. Si todavía queda tiempo, mantiene la zona abierta y solo hace un
+   chequeo MQTT; si terminó el tiempo, cierra la zona y deja pendiente el cambio
+   hasta comprobar MQTT.
+3. Conecta a Wi-Fi y sincroniza hora por NTP.
 4. Conecta a HiveMQ mediante TLS.
 5. Publica batería y estado de rutina.
-6. Se suscribe al topic de rutina y a los 4 topics de comando.
+6. Se suscribe a la programación, al topic de rutina inmediata y a los 4 topics
+   de comando.
 7. Escucha durante 7 segundos para recibir mensajes retenidos.
-8. Si recibe una rutina nueva, la copia a memoria RTC y abre el primer paso.
-9. Publica `sleeping`, desconecta y entra en deep sleep.
+8. Si estaba cambiando de zona, comprueba que la rutina siga existiendo sin
+   cambios en la programación retenida. Si cambió o fue desactivada, se detiene;
+   si sigue vigente, abre la siguiente zona o marca la rutina como `finished`.
+9. Si no hay rutina activa, calcula la próxima rutina programada. Si empieza
+   antes del siguiente ciclo por defecto, ajusta el deep sleep para despertar
+   unos segundos antes de su `startTime`; si no, duerme los 5 minutos por
+   defecto.
+10. Publica `riego/device/sleep`, publica `sleeping`, desconecta y entra en
+    deep sleep.
 
-Con una rutina activa, el deep sleep ya no usa siempre 10 minutos: usa la
-duracion del paso actual. Por ejemplo, una rutina de 5 minutos en zona 1 y
-12 minutos en zona 2 se ejecuta asi:
+Con una rutina activa, el deep sleep despierta cada minuto para comprobar si se
+ha modificado o cancelado la rutina, y también despierta justo cuando toca el
+siguiente cambio de zona. Por ejemplo, una rutina de 5 minutos en zona 1 y
+12 minutos en zona 2 se ejecuta así:
 
-1. Recibe la rutina, abre zona 1 y duerme 5 minutos.
-2. Despierta, cierra zona 1, abre zona 2 y duerme 12 minutos.
-3. Despierta, cierra zona 2, marca la rutina como `finished` y vuelve al ciclo
-   normal de 10 minutos.
+1. Detecta que la rutina empieza antes del siguiente ciclo y duerme hasta unos
+   segundos antes de su hora de inicio.
+2. Despierta, comprueba la programación retenida, abre zona 1 y duerme 5
+   minutos en tramos máximos de 1 minuto, manteniendo la válvula abierta entre
+   chequeos.
+3. Al agotarse la zona 1, cierra zona 1, comprueba que la programación no
+   cambió, abre zona 2 y repite chequeos de 1 minuto hasta completar sus
+   12 minutos.
+4. Al agotarse la zona 2, cierra zona 2, marca la rutina como `finished` y
+   vuelve al ciclo
+   normal de 5 minutos.
 
 Si falla Wi-Fi o MQTT, el equipo vuelve igualmente a dormir para proteger la
-batería y reintenta en el siguiente ciclo. Si ya habia una rutina guardada en
-memoria RTC, el cambio de zona se ejecuta antes de intentar conectar, por lo que
-un fallo de red no deja la zona abierta esperando a MQTT.
+batería y reintenta. Si el fallo ocurre durante una zona activa, la zona sigue
+abierta y se reintenta en 1 minuto; si ocurre justo al cambiar de zona, la zona
+terminada ya queda cerrada y no se abre la siguiente hasta poder comprobar MQTT.
 
 ## Configuración privada
 
