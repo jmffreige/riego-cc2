@@ -66,6 +66,22 @@
               <span class="battery-voltage" id="battery-voltage">Esperando telemetría</span>
             </span>
           </article>
+
+          <article class="metric sleep-metric" id="sleep-metric">
+            <span class="metric__icon metric__icon--sleep" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 7v5l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+            </span>
+            <span>
+              <small>Próximo despertar</small>
+              <strong id="sleep-countdown">Sin datos</strong>
+              <span class="sleep-detail" id="sleep-detail">Esperando deep sleep</span>
+            </span>
+          </article>
+
+          <article class="problem-card is-hidden" id="problem-card" role="status" aria-live="polite">
+            <strong id="problem-title">Incidencia de conexión</strong>
+            <span id="problem-detail">Esperando diagnóstico</span>
+          </article>
         </div>
       </section>
 

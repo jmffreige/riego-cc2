@@ -6,7 +6,11 @@ const MQTT_DEFAULTS = Object.freeze({
 
 const PROGRAM_TOPIC = "riego/programacion/cmd";
 const BATTERY_TOPIC = "riego/device/battery";
+const SLEEP_TOPIC = "riego/device/sleep";
+const PROBLEM_TOPIC = "riego/device/problem";
 const PROGRAM_STORAGE_KEY = "riego-programacion";
+const DEFAULT_RETRY_SECONDS = 5 * 60;
+const WAKE_CONFIRMATION_GRACE_SECONDS = 75;
 const WEEKDAYS = Object.freeze(["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]);
 const WEEKDAY_OPTIONS = Object.freeze([
   { value: 1, short: "L", name: "Lunes" },
@@ -37,6 +41,11 @@ const elements = {
   batteryPercent: document.querySelector("#battery-percent"),
   batteryBar: document.querySelector("#battery-bar"),
   batteryVoltage: document.querySelector("#battery-voltage"),
+  sleepCountdown: document.querySelector("#sleep-countdown"),
+  sleepDetail: document.querySelector("#sleep-detail"),
+  problemCard: document.querySelector("#problem-card"),
+  problemTitle: document.querySelector("#problem-title"),
+  problemDetail: document.querySelector("#problem-detail"),
   zonesGrid: document.querySelector("#zones-grid"),
   programForm: document.querySelector("#program-form"),
   programSummary: document.querySelector("#program-summary"),
@@ -61,6 +70,8 @@ const elements = {
 let client = null;
 let toastTimer = null;
 let cycleTimer = null;
+let sleepCountdownTimer = null;
+let sleepState = null;
 let activeZoneId = null;
 let cycleRunning = false;
 
@@ -476,6 +487,162 @@ function setBatteryState(rawPayload) {
   elements.batteryMetric.dataset.level = level;
 }
 
+function parseSleepPayload(rawPayload) {
+  try {
+    const data = JSON.parse(rawPayload.trim());
+    const sleepSeconds = Number(data.sleepSeconds);
+    const wakeAtEpoch = data.wakeAtEpoch === null || data.wakeAtEpoch === undefined ? null : Number(data.wakeAtEpoch);
+    const publishedAtEpoch = data.publishedAtEpoch === null || data.publishedAtEpoch === undefined
+      ? null
+      : Number(data.publishedAtEpoch);
+    if (!Number.isFinite(sleepSeconds) || sleepSeconds <= 0) return null;
+
+    return {
+      sleepSeconds,
+      wakeAtEpoch: Number.isFinite(wakeAtEpoch) ? wakeAtEpoch : null,
+      publishedAtEpoch: Number.isFinite(publishedAtEpoch) ? publishedAtEpoch : null,
+      reason: typeof data.reason === "string" ? data.reason : "poll",
+      routineActive: data.routineActive === true,
+      receivedAtMs: Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatCountdown(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours} h ${String(minutes).padStart(2, "0")} min`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function sleepReasonLabel(reason) {
+  const labels = {
+    poll: "Ciclo normal",
+    scheduled_start: "Rutina programada",
+    routine_step: "Siguiente paso",
+  };
+  return labels[reason] || "Ciclo normal";
+}
+
+function nextEstimatedRetry(wakeAtMs) {
+  const retryMs = DEFAULT_RETRY_SECONDS * 1000;
+  const elapsedRetries = Math.max(1, Math.ceil((Date.now() - wakeAtMs) / retryMs));
+  return wakeAtMs + elapsedRetries * retryMs;
+}
+
+function renderSleepCountdown() {
+  if (!sleepState) {
+    elements.sleepCountdown.textContent = "Sin datos";
+    elements.sleepDetail.textContent = "Esperando deep sleep";
+    return;
+  }
+
+  const wakeAtMs = sleepState.wakeAtEpoch === null
+    ? sleepState.receivedAtMs + sleepState.sleepSeconds * 1000
+    : sleepState.wakeAtEpoch * 1000;
+  const secondsLeft = Math.max(0, Math.ceil((wakeAtMs - Date.now()) / 1000));
+  const wakeTime = new Intl.DateTimeFormat("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(wakeAtMs));
+  const overdueSeconds = Math.floor((Date.now() - wakeAtMs) / 1000);
+
+  if (overdueSeconds > WAKE_CONFIRMATION_GRACE_SECONDS) {
+    const retryAtMs = nextEstimatedRetry(wakeAtMs);
+    const retryTime = new Intl.DateTimeFormat("es-ES", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(retryAtMs));
+    elements.sleepCountdown.textContent = "Sin confirmar";
+    elements.sleepDetail.textContent = `Reintento estimado · ${retryTime}`;
+    showProblem(
+      "Sin confirmación del controlador",
+      `Debía despertar a las ${wakeTime}. Si no pudo conectarse, volverá a intentar leer órdenes retenidas sobre las ${retryTime}.`,
+    );
+    return;
+  }
+
+  elements.sleepCountdown.textContent = secondsLeft > 0 ? formatCountdown(secondsLeft) : "Despertando";
+  elements.sleepDetail.textContent = sleepState.wakeAtEpoch === null
+    ? `${sleepReasonLabel(sleepState.reason)} · aprox.`
+    : `${sleepReasonLabel(sleepState.reason)} · ${wakeTime}`;
+  if (elements.problemTitle.textContent === "Sin confirmación del controlador") {
+    elements.problemCard.classList.add("is-hidden");
+  }
+}
+
+function setSleepState(rawPayload) {
+  const parsed = parseSleepPayload(rawPayload);
+  if (!parsed) return;
+
+  sleepState = parsed;
+  renderSleepCountdown();
+  if (!sleepCountdownTimer) {
+    sleepCountdownTimer = setInterval(renderSleepCountdown, 1000);
+  }
+}
+
+function parseProblemPayload(rawPayload) {
+  try {
+    const data = JSON.parse(rawPayload.trim());
+    if (!data || typeof data !== "object" || !data.code) return null;
+    const retryAtEpoch = data.retryAtEpoch === null || data.retryAtEpoch === undefined
+      ? null
+      : Number(data.retryAtEpoch);
+    const retrySeconds = data.retrySeconds === null || data.retrySeconds === undefined
+      ? null
+      : Number(data.retrySeconds);
+    const resolvedAtEpoch = data.resolvedAtEpoch === null || data.resolvedAtEpoch === undefined
+      ? null
+      : Number(data.resolvedAtEpoch);
+    return {
+      active: data.active === true,
+      resolved: data.resolved === true,
+      code: String(data.code),
+      operation: typeof data.operation === "string" ? data.operation : "retained_commands",
+      detail: typeof data.detail === "string" ? data.detail : "No se pudieron leer las órdenes retenidas.",
+      retryAtEpoch: Number.isFinite(retryAtEpoch) && retryAtEpoch > 0 ? retryAtEpoch : null,
+      retrySeconds: Number.isFinite(retrySeconds) ? retrySeconds : null,
+      resolvedAtEpoch: Number.isFinite(resolvedAtEpoch) && resolvedAtEpoch > 0 ? resolvedAtEpoch : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function showProblem(title, detail) {
+  elements.problemTitle.textContent = title;
+  elements.problemDetail.textContent = detail;
+  elements.problemCard.classList.remove("is-hidden");
+}
+
+function setProblemState(rawPayload) {
+  const problem = parseProblemPayload(rawPayload);
+  if (!problem) return;
+
+  const retryAtMs = problem.retryAtEpoch ? problem.retryAtEpoch * 1000 : Date.now() + DEFAULT_RETRY_SECONDS * 1000;
+  const retryTime = new Intl.DateTimeFormat("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(retryAtMs));
+
+  if (problem.active) {
+    showProblem("Incidencia pendiente", `${problem.detail} Próximo intento previsto: ${retryTime}.`);
+    return;
+  }
+
+  if (problem.resolved) {
+    showProblem("Última incidencia recuperada", `${problem.detail} El controlador volvió a comunicar después del fallo.`);
+  }
+}
+
 function showToast(message) {
   clearTimeout(toastTimer);
   elements.toast.textContent = message;
@@ -519,7 +686,7 @@ function connectMqtt(config) {
     elements.connectButton.disabled = false;
     elements.dialog.close();
     client.subscribe(
-      [...ZONES.map((zone) => zone.stateTopic), BATTERY_TOPIC],
+      [...ZONES.map((zone) => zone.stateTopic), BATTERY_TOPIC, SLEEP_TOPIC, PROBLEM_TOPIC],
       { qos: 1 },
       (error) => showToast(error ? "No se pudo consultar el estado del programador." : "Programador conectado"),
     );
@@ -529,6 +696,8 @@ function connectMqtt(config) {
     const zone = ZONES.find((item) => item.stateTopic === topic);
     if (zone) setZoneState(zone.id, payload.toString());
     if (topic === BATTERY_TOPIC) setBatteryState(payload.toString());
+    if (topic === SLEEP_TOPIC) setSleepState(payload.toString());
+    if (topic === PROBLEM_TOPIC) setProblemState(payload.toString());
   });
   client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));
   client.on("offline", () => setConnectionStatus("error", "Sin conexión"));
@@ -718,6 +887,7 @@ elements.settingsForm.addEventListener("submit", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  clearInterval(sleepCountdownTimer);
   if (cycleRunning && activeZoneId) {
     client?.publish(ZONES[activeZoneId - 1].commandTopic, "OFF", { qos: 1, retain: true });
   }

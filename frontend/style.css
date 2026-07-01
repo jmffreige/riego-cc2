@@ -440,6 +440,11 @@ svg {
   color: var(--cream);
 }
 
+.metric__icon--sleep {
+  background: rgba(96, 232, 157, 0.1);
+  color: var(--green);
+}
+
 .metric__icon svg {
   width: 21px;
   height: 21px;
@@ -499,6 +504,35 @@ svg {
 .battery-voltage {
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.sleep-detail {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.problem-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 141, 119, 0.24);
+  border-radius: 18px;
+  background: rgba(255, 141, 119, 0.08);
+  color: #ffd9d0;
+}
+
+.problem-card.is-hidden {
+  display: none;
+}
+
+.problem-card strong {
+  font-size: 0.82rem;
+}
+
+.problem-card span {
+  color: #f5b8ab;
+  font-size: 0.7rem;
+  line-height: 1.4;
 }
 
 .devices-section {
