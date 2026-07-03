@@ -13,10 +13,27 @@ Este documento contiene el mapa exacto pin a pin para soldar en la placa PCB per
 
 La placa Lolin32 Lite gestiona la energía. Las baterías alimentan el sistema y el panel solar recarga las baterías a través de la placa.
 
+> Importante: La **Lolin32 Lite no tiene pin BAT/VBAT accesible** en las tiras laterales. El único acceso directo a la batería es el conector blanco JST PH2.0. Por eso el elevador MT3608 debe alimentarse desde una bifurcación física de los cables de batería, no desde un pin de la Lolin32.
+
 ### Baterías: portapilas
 
-- Cable **ROJO (+)** -> al polo **POSITIVO** del conector blanco JST PH2.0 de la Lolin32.
-- Cable **NEGRO (-)** -> al polo **NEGATIVO** del conector blanco JST PH2.0.
+Usa dos clemas como entrada general de batería en la placa perforada:
+
+- **Clema BATERIA+**: punto de reparto para el positivo.
+- **Clema BATERIA-/GND**: punto de reparto para el negativo y masa común.
+
+### Reparto del positivo: bifurcación en Y
+
+- Cable **ROJO (+)** del portapilas -> clema **BATERIA+**. **[⚡ POTENCIA]**
+- Desde clema **BATERIA+** -> cable rojo del conector **JST PH2.0** que va a la Lolin32. **[⚡ POTENCIA]**
+- Desde clema **BATERIA+** -> pin **VIN+** del elevador MT3608. **[⚡ POTENCIA]**
+
+### Reparto del negativo: masa común
+
+- Cable **NEGRO (-)** del portapilas -> clema **BATERIA-/GND**. **[⚡ POTENCIA]**
+- Desde clema **BATERIA-/GND** -> cable negro del conector **JST PH2.0** que va a la Lolin32. **[⚡ POTENCIA]**
+- Desde clema **BATERIA-/GND** -> pin **VIN-** del elevador MT3608. **[⚡ POTENCIA]**
+- Desde clema **BATERIA-/GND** -> línea de masa común **GND** de la placa perforada. **[⚡ POTENCIA]**
 
 > Nota: Usa clemas, Wagos o empalme soldado para unir el portapilas al cablecito JST.
 
@@ -27,12 +44,14 @@ La placa Lolin32 Lite gestiona la energía. Las baterías alimentan el sistema y
 
 ## 2. Subsistema de potencia: generación de los 9 V
 
-Aquí robamos energía directamente de las baterías, sin pasar por el delicado chip de 3.3 V, y la subimos a 9 V, almacenándola en el condensador.
+Aquí tomamos energía directamente de las baterías, sin pasar por el regulador de 3.3 V ni por ningún pin de potencia de la Lolin32, y la subimos a 9 V, almacenándola en el condensador.
 
 ### Entrada del elevador MT3608
 
-- Pin **BAT** o **VBAT** de la Lolin32 -> pin **VIN+** del MT3608. **[⚡ POTENCIA]**
-- Pin **GND** de la Lolin32 -> pin **VIN-** del MT3608. **[⚡ POTENCIA]**
+- Clema **BATERIA+** -> pin **VIN+** del MT3608. **[⚡ POTENCIA]**
+- Clema **BATERIA-/GND** -> pin **VIN-** del MT3608. **[⚡ POTENCIA]**
+
+> Nota: El MT3608 queda en una rama paralela a la Lolin32. Cuando pida corriente para abrir o cerrar una válvula, la corriente sale directamente de las baterías hacia el elevador, sin atravesar el ESP32 ni su regulador.
 
 ### Salida del elevador: autopista de 9 V
 
