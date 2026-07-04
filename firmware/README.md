@@ -27,8 +27,8 @@ cuando detecta una rutina que debe empezar antes del siguiente ciclo.
 | --- | --- | --- | --- |
 | 1 | GPIO 4 | GPIO 16 | DRV8833 1 |
 | 2 | GPIO 17 | GPIO 18 | DRV8833 1 |
-| 3 | GPIO 19 | GPIO 23 | DRV8833 2 |
-| 4 | GPIO 26 | GPIO 25 | DRV8833 2 |
+| 3 | GPIO 26 | GPIO 27 | DRV8833 2 |
+| 4 | GPIO 32 | GPIO 33 | DRV8833 2 |
 
 La batería se lee en `GPIO35`, usando el divisor interno del Lolin32 Lite.
 
