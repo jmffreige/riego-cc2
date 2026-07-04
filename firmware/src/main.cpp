@@ -81,8 +81,8 @@ struct RetainedCheckProblem {
 const ValveZone zones[ZONE_COUNT] = {
   {4, 16, "riego/zona1/cmd", "riego/zona1/state"},
   {17, 18, "riego/zona2/cmd", "riego/zona2/state"},
-  {19, 21, "riego/zona3/cmd", "riego/zona3/state"},
-  {22, 23, "riego/zona4/cmd", "riego/zona4/state"},
+  {19, 23, "riego/zona3/cmd", "riego/zona3/state"},
+  {26, 25, "riego/zona4/cmd", "riego/zona4/state"},
 };
 
 const char* ROUTINE_CONFIG_TOPIC = "riego/routine/config";
