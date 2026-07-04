@@ -92,10 +92,10 @@ Estas son las órdenes de apertura y cierre que viajan desde el ESP32 hasta los 
 
 ### Módulo DRV8833 Nº2: zonas 3 y 4
 
-- Pin **GPIO 19** de la Lolin32 -> pin **IN1**: abre zona 3.
-- Pin **GPIO 23** de la Lolin32 -> pin **IN2**: cierra zona 3.
+- Pin **GPIO 32** de la Lolin32 -> pin **IN1**: abre zona 3.
+- Pin **GPIO 33** de la Lolin32 -> pin **IN2**: cierra zona 3.
 - Pin **GPIO 26** de la Lolin32 -> pin **IN3**: abre zona 4.
-- Pin **GPIO 25** de la Lolin32 -> pin **IN4**: cierra zona 4.
+- Pin **GPIO 27** de la Lolin32 -> pin **IN4**: cierra zona 4.
 
 ## 5. Salidas a las válvulas Rain Bird
 
