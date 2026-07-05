@@ -25,12 +25,24 @@ cuando detecta una rutina que debe empezar antes del siguiente ciclo.
 
 | Zona | Apertura | Cierre | Driver |
 | --- | --- | --- | --- |
-| 1 | GPIO 4 | GPIO 16 | DRV8833 1 |
-| 2 | GPIO 17 | GPIO 18 | DRV8833 1 |
-| 3 | GPIO 19 | GPIO 21 | DRV8833 2 |
-| 4 | GPIO 22 | GPIO 23 | DRV8833 2 |
+| 1 | GPIO 16 | GPIO 4 | DRV8833 1 |
+| 2 | GPIO 18 | GPIO 17 | DRV8833 1 |
+| 3 | GPIO 27 | GPIO 26 | DRV8833 2 |
+| 4 | GPIO 33 | GPIO 32 | DRV8833 2 |
 
-La batería se lee en `GPIO35`, usando el divisor interno del Lolin32 Lite.
+La batería se lee en `GPIO34` mediante un divisor resistivo externo 1:2. El
+pack es 1S2P, con dos celdas Li-ion en paralelo, por lo que la tensión máxima
+sigue siendo 4.20 V. Con dos resistencias de 100 kOhm, el punto medio entrega
+2.10 V al ADC cuando la batería está llena.
+
+Conexión del divisor:
+
+```text
+BATERIA+ 1S2P ---- 100 kOhm ---- GPIO34 ---- 100 kOhm ---- GND comun
+```
+
+`GPIO34` es solo entrada y pertenece a ADC1, adecuado para esta medida. No usar
+`GPIO32` ni `GPIO33`, porque controlan la zona 4.
 
 ## Lógica de válvulas latching
 
@@ -39,6 +51,14 @@ Cada válvula se acciona con un pulso de 50 ms:
 - Abrir: pin de apertura `HIGH`, pin de cierre `LOW`.
 - Cerrar: pin de apertura `LOW`, pin de cierre `HIGH`.
 - Reposo: todos los pines quedan en `LOW`.
+
+La polaridad se verificó con las válvulas reales. En este montaje los pines
+físicos que inicialmente se probaron como "abrir" cerraban las válvulas, por lo
+que el pinout definitivo ya aparece invertido en la tabla anterior.
+
+Para proteger la reserva de energía del condensador, el firmware espera
+`VALVE_RECHARGE_MS = 15000` entre cerrar una zona y abrir la siguiente durante
+una rutina.
 
 El firmware guarda en memoria RTC el último estado aplicado durante deep sleep.
 Así, si la PWA mantiene un comando retenido sin cambios, el ESP32 publica el
@@ -118,6 +138,11 @@ Para cancelar esa rutina inmediata, publicar en `riego/routine/config`:
 { "enabled": false }
 ```
 
+Ese topic se usa solo para rutinas inmediatas. Un `{ "enabled": false }`
+retenido en `riego/routine/config` no cancela una rutina programada que venga de
+`riego/programacion/cmd`. Esto evita que un comando manual antiguo detenga una
+programación automática.
+
 ## Topics MQTT
 
 La PWA debe publicar comandos con `retain: true`.
@@ -184,9 +209,12 @@ Ejemplo de incidencia recuperada:
 El ESP32 guarda estas incidencias en memoria RTC cuando no puede conectar a
 Wi-Fi o MQTT y, por tanto, no puede leer los mensajes retenidos. Si en ese
 momento no tiene conexión, no puede avisar inmediatamente; publica la incidencia
-en `riego/device/problem` en el siguiente contacto MQTT exitoso. La PWA además
-detecta si pasa `wakeAtEpoch` sin recibir una nueva telemetría de sueño y muestra
-un reintento estimado usando el ciclo normal de 5 minutos.
+en `riego/device/problem` en el siguiente contacto MQTT exitoso. En el despertar
+correcto siguiente publica `{"active":false,"resolved":false}` para limpiar la
+incidencia retenida y que el panel no muestre un aviso histórico.
+
+La PWA además detecta si pasa `wakeAtEpoch` sin recibir una nueva telemetría de
+sueño y muestra un reintento estimado usando el ciclo normal de 5 minutos.
 
 Ejemplo de estado de rutina:
 
@@ -230,7 +258,8 @@ En cada ciclo normal:
 7. Escucha durante 7 segundos para recibir mensajes retenidos.
 8. Si estaba cambiando de zona, comprueba que la rutina siga existiendo sin
    cambios en la programación retenida. Si cambió o fue desactivada, se detiene;
-   si sigue vigente, abre la siguiente zona o marca la rutina como `finished`.
+   si sigue vigente, espera 15 segundos para recargar el condensador y abre la
+   siguiente zona o marca la rutina como `finished`.
 9. Si no hay rutina activa, calcula la próxima rutina programada. Si empieza
    antes del siguiente ciclo por defecto, ajusta el deep sleep para despertar
    unos segundos antes de su `startTime`; si no, duerme los 5 minutos por
@@ -259,6 +288,7 @@ Si falla Wi-Fi o MQTT, el equipo vuelve igualmente a dormir para proteger la
 batería y reintenta. Si el fallo ocurre durante una zona activa, la zona sigue
 abierta y se reintenta en 1 minuto; si ocurre justo al cambiar de zona, la zona
 terminada ya queda cerrada y no se abre la siguiente hasta poder comprobar MQTT.
+La rutina no se pierde: su progreso se conserva en memoria RTC.
 
 ## Configuración privada
 
@@ -294,10 +324,45 @@ Monitor serie:
 pio device monitor --baud 115200
 ```
 
+## Firmware de prueba de salidas
+
+Para comprobar con polímetro que los puentes H accionan todas las zonas sin que
+el ESP32 entre en deep sleep, existe un entorno independiente:
+
+```bash
+pio run -e valve_test --target upload
+pio device monitor -e valve_test --baud 115200
+```
+
+Este firmware no usa Wi-Fi ni MQTT. Repite continuamente:
+
+1. Abrir zona 1 con pulso de 50 ms.
+2. Esperar 15 s.
+3. Cerrar zona 1 con pulso de 50 ms.
+4. Esperar 15 s y repetir la misma secuencia para zonas 2, 3 y 4.
+5. Esperar 20 s y repetir el ciclo completo.
+
+Los ajustes están al principio de `src/valve_test.cpp`:
+
+```cpp
+constexpr uint32_t PULSE_MS = 50;
+constexpr uint32_t PAUSE_BETWEEN_ZONES_MS = 15000;
+```
+
+`PULSE_MS` controla cuánto dura cada accionamiento. Las pausas largas entre
+maniobras dejan tiempo para que se recupere el condensador. Para volver al
+firmware real:
+
+```bash
+pio run -e esp32dev --target upload
+```
+
 ## Notas de calibración
 
-- La lectura de batería asume divisor 1:2 y ADC de 12 bits con referencia de
-  3.3 V. Si la lectura real difiere, ajustar `BATTERY_DIVIDER_FACTOR`.
+- La lectura de batería usa pack Li-ion 1S2P y divisor externo 100 kOhm /
+  100 kOhm en `GPIO34`. El divisor físico es 1:2, pero
+  `BATTERY_DIVIDER_FACTOR` está calibrado a `2.09` para este montaje porque el
+  ADC del ESP32 leía bajo: con 2.08-2.09 V medidos en GPIO34 publicaba 3.99 V.
 - El porcentaje usa una escala lineal entre 3.20 V y 4.20 V por celda. Es
   suficiente para telemetría operativa, aunque no equivale a una curva SoC
   precisa para Li-ion.

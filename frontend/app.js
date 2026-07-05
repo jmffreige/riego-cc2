@@ -5,12 +5,16 @@ const MQTT_DEFAULTS = Object.freeze({
 });
 
 const PROGRAM_TOPIC = "riego/programacion/cmd";
+const ROUTINE_CONFIG_TOPIC = "riego/routine/config";
 const BATTERY_TOPIC = "riego/device/battery";
+const STATUS_TOPIC = "riego/device/status";
 const SLEEP_TOPIC = "riego/device/sleep";
 const PROBLEM_TOPIC = "riego/device/problem";
+const ROUTINE_STATE_TOPIC = "riego/routine/state";
 const PROGRAM_STORAGE_KEY = "riego-programacion";
 const DEFAULT_RETRY_SECONDS = 5 * 60;
 const WAKE_CONFIRMATION_GRACE_SECONDS = 75;
+const PROBLEM_RECENT_WINDOW_SECONDS = 10 * 60;
 const WEEKDAYS = Object.freeze(["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]);
 const WEEKDAY_OPTIONS = Object.freeze([
   { value: 1, short: "L", name: "Lunes" },
@@ -74,6 +78,7 @@ let sleepCountdownTimer = null;
 let sleepState = null;
 let activeZoneId = null;
 let cycleRunning = false;
+let deviceStatus = "unknown";
 
 function createRoutine(index = 0) {
   return {
@@ -424,13 +429,60 @@ function setConnectionStatus(status, label) {
   elements.connectionButton.dataset.status = status;
   elements.connectionLabel.textContent = label;
   const summaries = {
-    connected: cycleRunning ? "Ciclo de riego en marcha" : "Programador conectado",
+    connected: cycleRunning ? "Ciclo de riego en marcha" : deviceStatusLabel(deviceStatus),
     connecting: "Conectando…",
     error: "Conexión interrumpida",
     idle: "Esperando conexión",
   };
   elements.systemSummary.textContent = summaries[status] || summaries.idle;
   updateRunButtons();
+}
+
+function deviceStatusLabel(status) {
+  const labels = {
+    online: "Controlador despierto",
+    sleeping: "Controlador dormido",
+    offline: "Controlador desconectado",
+    unknown: "Esperando telemetría",
+  };
+  return labels[status] || labels.unknown;
+}
+
+function setDeviceStatus(rawPayload) {
+  const status = rawPayload.trim().toLowerCase();
+  if (!["online", "sleeping", "offline"].includes(status)) return;
+  deviceStatus = status;
+  if (client?.connected && !cycleRunning) {
+    elements.systemSummary.textContent = deviceStatusLabel(status);
+  }
+}
+
+function setRoutineState(rawPayload) {
+  try {
+    const routine = JSON.parse(rawPayload.trim());
+    if (!routine || typeof routine !== "object") return;
+    const nextWakeSeconds = Number(routine.nextWakeSeconds);
+    if (Number.isFinite(nextWakeSeconds) && nextWakeSeconds > 0) {
+      setSleepFallback(nextWakeSeconds, routine.status);
+    }
+
+    if (routine.status === "watering" && Number(routine.openZone) > 0) {
+      elements.cycleStatus.textContent = `Rutina activa · Regando Zona ${routine.openZone}`;
+      elements.cycleDetail.textContent = `${routine.step || 1} de ${routine.stepCount || "?"} pasos.`;
+      return;
+    }
+    if (routine.status === "scheduled") {
+      elements.cycleStatus.textContent = "Rutina programada";
+      elements.cycleDetail.textContent = "El controlador ha ajustado el próximo despertar.";
+      return;
+    }
+    if (routine.status === "idle" || routine.status === "finished") {
+      elements.cycleStatus.textContent = routine.status === "finished" ? "Rutina completada" : "Ciclo detenido";
+      elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
+    }
+  } catch {
+    // El estado de rutina siempre debería ser JSON, pero ignoramos mensajes manuales inválidos.
+  }
 }
 
 function setZoneState(zoneId, rawState) {
@@ -526,6 +578,7 @@ function sleepReasonLabel(reason) {
   const labels = {
     poll: "Ciclo normal",
     scheduled_start: "Rutina programada",
+    routine_check: "Comprobación de rutina",
     routine_step: "Siguiente paso",
   };
   return labels[reason] || "Ciclo normal";
@@ -589,10 +642,34 @@ function setSleepState(rawPayload) {
   }
 }
 
+function setSleepFallback(nextWakeSeconds, routineStatus = "idle") {
+  if (sleepState?.wakeAtEpoch !== null) return;
+
+  sleepState = {
+    sleepSeconds: nextWakeSeconds,
+    wakeAtEpoch: null,
+    publishedAtEpoch: null,
+    reason: routineStatus === "watering"
+      ? "routine_check"
+      : routineStatus === "scheduled"
+        ? "scheduled_start"
+        : "poll",
+    routineActive: routineStatus === "watering",
+    receivedAtMs: Date.now(),
+  };
+  renderSleepCountdown();
+  if (!sleepCountdownTimer) {
+    sleepCountdownTimer = setInterval(renderSleepCountdown, 1000);
+  }
+}
+
 function parseProblemPayload(rawPayload) {
   try {
     const data = JSON.parse(rawPayload.trim());
-    if (!data || typeof data !== "object" || !data.code) return null;
+    if (!data || typeof data !== "object") return null;
+    if (data.active === false && data.resolved === false) {
+      return { active: false, resolved: false, clear: true };
+    }
     const retryAtEpoch = data.retryAtEpoch === null || data.retryAtEpoch === undefined
       ? null
       : Number(data.retryAtEpoch);
@@ -602,10 +679,11 @@ function parseProblemPayload(rawPayload) {
     const resolvedAtEpoch = data.resolvedAtEpoch === null || data.resolvedAtEpoch === undefined
       ? null
       : Number(data.resolvedAtEpoch);
+    const code = typeof data.code === "string" ? data.code : "";
     return {
       active: data.active === true,
       resolved: data.resolved === true,
-      code: String(data.code),
+      code,
       operation: typeof data.operation === "string" ? data.operation : "retained_commands",
       detail: typeof data.detail === "string" ? data.detail : "No se pudieron leer las órdenes retenidas.",
       retryAtEpoch: Number.isFinite(retryAtEpoch) && retryAtEpoch > 0 ? retryAtEpoch : null,
@@ -623,9 +701,19 @@ function showProblem(title, detail) {
   elements.problemCard.classList.remove("is-hidden");
 }
 
+function hideProblem() {
+  elements.problemCard.classList.add("is-hidden");
+  elements.problemTitle.textContent = "";
+  elements.problemDetail.textContent = "";
+}
+
 function setProblemState(rawPayload) {
   const problem = parseProblemPayload(rawPayload);
   if (!problem) return;
+  if (problem.clear) {
+    hideProblem();
+    return;
+  }
 
   const retryAtMs = problem.retryAtEpoch ? problem.retryAtEpoch * 1000 : Date.now() + DEFAULT_RETRY_SECONDS * 1000;
   const retryTime = new Intl.DateTimeFormat("es-ES", {
@@ -639,6 +727,12 @@ function setProblemState(rawPayload) {
   }
 
   if (problem.resolved) {
+    const isRecent = problem.resolvedAtEpoch === null
+      || Date.now() - problem.resolvedAtEpoch * 1000 <= PROBLEM_RECENT_WINDOW_SECONDS * 1000;
+    if (!isRecent) {
+      hideProblem();
+      return;
+    }
     showProblem("Última incidencia recuperada", `${problem.detail} El controlador volvió a comunicar después del fallo.`);
   }
 }
@@ -686,7 +780,14 @@ function connectMqtt(config) {
     elements.connectButton.disabled = false;
     elements.dialog.close();
     client.subscribe(
-      [...ZONES.map((zone) => zone.stateTopic), BATTERY_TOPIC, SLEEP_TOPIC, PROBLEM_TOPIC],
+      [
+        ...ZONES.map((zone) => zone.stateTopic),
+        BATTERY_TOPIC,
+        STATUS_TOPIC,
+        SLEEP_TOPIC,
+        PROBLEM_TOPIC,
+        ROUTINE_STATE_TOPIC,
+      ],
       { qos: 1 },
       (error) => showToast(error ? "No se pudo consultar el estado del programador." : "Programador conectado"),
     );
@@ -696,8 +797,10 @@ function connectMqtt(config) {
     const zone = ZONES.find((item) => item.stateTopic === topic);
     if (zone) setZoneState(zone.id, payload.toString());
     if (topic === BATTERY_TOPIC) setBatteryState(payload.toString());
+    if (topic === STATUS_TOPIC) setDeviceStatus(payload.toString());
     if (topic === SLEEP_TOPIC) setSleepState(payload.toString());
     if (topic === PROBLEM_TOPIC) setProblemState(payload.toString());
+    if (topic === ROUTINE_STATE_TOPIC) setRoutineState(payload.toString());
   });
   client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));
   client.on("offline", () => setConnectionStatus("error", "Sin conexión"));
@@ -730,6 +833,10 @@ async function closeAllZones(exceptZoneId = null) {
   );
 }
 
+async function clearZoneCommands() {
+  await Promise.all(ZONES.map((zone) => publish(zone.commandTopic, "", { retain: true })));
+}
+
 function showRoutineInSequence(routine) {
   routine.durations.forEach((duration, index) => {
     document.querySelector(`#zone-duration-${index + 1}`).textContent = duration > 0 ? `${duration} min` : "Omitida";
@@ -753,7 +860,8 @@ async function stopCycle(message = "Ciclo detenido") {
   cycleTimer = null;
   cycleRunning = false;
   try {
-    await closeAllZones();
+    await publish(ROUTINE_CONFIG_TOPIC, JSON.stringify({ enabled: false }), { retain: true });
+    await clearZoneCommands();
     finishCycle(message);
   } catch {
     finishCycle("Detención enviada");
@@ -805,12 +913,29 @@ async function startRoutine(card) {
     return;
   }
 
-  cycleRunning = true;
   showRoutineInSequence(routine);
   updateRunButtons();
   elements.stopCycle.disabled = false;
-  elements.systemSummary.textContent = "Ciclo de riego en marcha";
-  await runZone(routine, 0);
+  elements.cycleStatus.textContent = `${routine.name} enviada`;
+  elements.cycleDetail.textContent = "El controlador la ejecutará en su próximo despertar.";
+  elements.systemSummary.textContent = "Rutina pendiente en MQTT";
+
+  const immediateRoutine = {
+    enabled: true,
+    id: Math.floor(Date.now() / 1000),
+    steps: routine.durations
+      .map((minutes, index) => ({ zone: index + 1, minutes }))
+      .filter((step) => step.minutes > 0),
+  };
+
+  try {
+    await clearZoneCommands();
+    await publish(ROUTINE_CONFIG_TOPIC, JSON.stringify(immediateRoutine), { retain: true });
+    showToast("Rutina inmediata enviada al controlador.");
+  } catch {
+    elements.stopCycle.disabled = true;
+    showToast("No se pudo enviar la rutina inmediata.");
+  }
 }
 
 renderZones();

@@ -16,8 +16,10 @@ flowchart LR
     Solar[Panel solar 6 W / 5 V USB] --> USB[Entrada USB / carga Lolin32 Lite]
     BatPack[2x Samsung INR18650-30Q en paralelo 1S2P] --> JST[JST-PH bateria]
     JST --> Lolin[Lolin32 Lite ESP32]
-    Lolin --> BAT[Pin BAT 3.7-4.2 V]
-    BAT --> Boost[MT3608 ajustado a 9.0 V]
+    BatPack --> BatBus[Clema BATERIA+ / GND]
+    BatBus --> Boost[MT3608 ajustado a 9.0 V]
+    BatBus --> Div[Divisor 100 kOhm / 100 kOhm]
+    Div --> ADC[GPIO34 lectura bateria]
     Boost --> Cap[Condensador 4700 uF 16 V]
     Cap --> DRV1[DRV8833 #1]
     Cap --> DRV2[DRV8833 #2]
@@ -49,6 +51,7 @@ latigazo inicial del solenoide.
 | Control de valvulas | DRV8833 1.5 A, puente H doble | 2 | Cada modulo controla dos valvulas e invierte la polaridad de salida. |
 | Valvulas | Rain Bird latching 9 V DC | 4 | Electrovalvulas de riego por pulso: +9 V para abrir y -9 V para cerrar. |
 | Conectores | Micro JST-PH 2.0, 2 pines | Varios | Conexion enchufable para bateria, valvulas y mantenimiento. |
+| Divisor bateria | Resistencias 100 kOhm | 2 | Divisor 1:2 para medir la bateria 1S2P desde GPIO34 sin superar 3.3 V. |
 
 Enlaces de compra anotados:
 
@@ -71,8 +74,10 @@ Enlaces de compra anotados:
 | Panel solar 6 W / 5 V | Adaptador USB-C a Micro-USB y entrada USB de la Lolin32 Lite | Usar la entrada de carga de la placa, no el pin BAT. |
 | Bateria 1S2P positivo | JST bateria positivo de la Lolin32 Lite | Cable rojo. Confirmar polaridad antes de enchufar. |
 | Bateria 1S2P negativo | JST bateria negativo de la Lolin32 Lite | Cable negro. |
-| Pin BAT Lolin32 Lite | IN+ MT3608 | Alimentacion del elevador desde la bateria gestionada por la placa. |
-| GND Lolin32 Lite | IN- MT3608 | Masa comun del sistema. |
+| Clema BATERIA+ | IN+ MT3608 | Alimentacion del elevador desde la bateria, en paralelo con la Lolin32. |
+| Clema BATERIA-/GND | IN- MT3608 | Masa comun del sistema. |
+| Bateria 1S2P positivo | Resistencia 100 kOhm -> GPIO34 | Rama superior del divisor de medida de bateria. |
+| GPIO34 | Resistencia 100 kOhm -> GND comun | Punto medio del divisor; el firmware multiplica la lectura por 2. |
 | OUT+ MT3608 | VM / VCC motor de DRV8833 | Ajustar antes el MT3608 a 9.0 V con multimetro. |
 | OUT- MT3608 | GND de DRV8833 | Masa comun. |
 | OUT+ y OUT- MT3608 | Condensador 4700 uF / 16 V | Pata larga al positivo; franja negativa a GND. |
@@ -87,10 +92,10 @@ Cada DRV8833 tiene dos canales. Cada canal se usa para una valvula latching.
 
 | Zona | Modulo | Canal DRV8833 | Salida a valvula | Apertura | Cierre |
 | --- | --- | --- | --- | --- | --- |
-| Zona 1 | DRV8833 #1 | A | AOUT1 / AOUT2 | GPIO 4 | GPIO 16 |
-| Zona 2 | DRV8833 #1 | B | BOUT1 / BOUT2 | GPIO 17 | GPIO 18 |
-| Zona 3 | DRV8833 #2 | A | AOUT1 / AOUT2 | GPIO 19 | GPIO 21 |
-| Zona 4 | DRV8833 #2 | B | BOUT1 / BOUT2 | GPIO 22 | GPIO 23 |
+| Zona 1 | DRV8833 #1 | A | AOUT1 / AOUT2 | GPIO 16 | GPIO 4 |
+| Zona 2 | DRV8833 #1 | B | BOUT1 / BOUT2 | GPIO 18 | GPIO 17 |
+| Zona 3 | DRV8833 #2 | A | AOUT1 / AOUT2 | GPIO 27 | GPIO 26 |
+| Zona 4 | DRV8833 #2 | B | BOUT1 / BOUT2 | GPIO 33 | GPIO 32 |
 
 Logica de pulso esperada para cada canal:
 
@@ -102,6 +107,12 @@ Logica de pulso esperada para cada canal:
 
 Despues de cada pulso, ambos pines deben volver a `LOW`. Las valvulas latching
 no deben quedar alimentadas continuamente.
+
+La polaridad anterior se verifico con las valvulas reales: los GPIO que
+inicialmente se habian marcado como apertura cerraban fisicamente las valvulas.
+Por eso el firmware y esta tabla usan el sentido corregido. Entre el cierre de
+una zona y la apertura de la siguiente el firmware espera 15 segundos para dar
+tiempo a que el condensador de 4700 uF vuelva a cargarse.
 
 ## Esquema de cableado por bloques
 
@@ -119,21 +130,32 @@ no deben quedar alimentadas continuamente.
 +-------------+                            +--------------+
 | Lolin32 Lite|<--- JST-PH 2.0 --->        | 2x 18650 1S2P|
 | ESP32       |                            | 30Q paralelo |
-+------+------+                            +--------------+
-       |
-       | BAT 3.7-4.2 V
-       v
-+-------------+       +9 V        +----------------------+
-| MT3608      +------------------->| DRV8833 #1          |
-| boost 9.0 V |                    | Zona 1 / Zona 2     |
-+------+------+                    +----------------------+
-       |
-       | +9 V
-       v
-+-------------+                    +----------------------+
-| 4700 uF 16 V|------------------->| DRV8833 #2          |
-| en salida   |                    | Zona 3 / Zona 4     |
-+-------------+                    +----------------------+
++------+------+                            +------+-------+
+       ^                                          |
+       | GPIO34                                   | BATERIA+ / GND
+       |                                          v
+       |                                  +---------------+
+       |                                  | Clema bateria |
+       |                                  +---+-------+---+
+       |                                      |       |
+       |                                      |       v
+       |                                      |  +-------------+       +9 V        +----------------------+
+       |                                      |  | MT3608      +------------------->| DRV8833 #1          |
+       |                                      |  | boost 9.0 V |                    | Zona 1 / Zona 2     |
+       |                                      |  +------+------+                    +----------------------+
+       |                                      |         |
+       |                                      |         | +9 V
+       |                                      |         v
+       |                                      |  +-------------+                    +----------------------+
+       |                                      |  | 4700 uF 16 V|------------------->| DRV8833 #2          |
+       |                                      |  | en salida   |                    | Zona 3 / Zona 4     |
+       |                                      |  +-------------+                    +----------------------+
+       |                                      |
+       |                                      v
+       |                              +---------------+
+       +------------------------------| Divisor 100k  |
+                                      | / 100k        |
+                                      +---------------+
 
 GND comun: Lolin32 Lite, MT3608, condensador y ambos DRV8833.
 3V3 comun: EEP/SLEEP de ambos DRV8833, solo logica.
@@ -185,9 +207,12 @@ VCC, GND, EEP y los canales principales eran funcionales.
 - El VCC de potencia del DRV8833 se alimento con 9 V, mientras que EEP/SLEEP se
   mantuvo a 3.3 V. Este punto es critico: EEP/SLEEP no debe recibir la linea de
   9 V.
-- Con un programa de prueba en Arduino IDE se alternaron HIGH/LOW durante 5 s en
-  GPIO 4 y GPIO 16. El multimetro registro correctamente +9.0 V y -9.0 V en
-  OUT1/OUT2, replicando el pulso necesario para operar las valvulas latching.
+- Con un firmware de prueba PlatformIO (`env:valve_test`) se probaron las cuatro
+  zonas con pulsos de 50 ms y pausas largas. La prueba confirmo que el sentido
+  fisico correcto es: GPIO 16/18/27/33 para abrir y GPIO 4/17/26/32 para cerrar.
+- Las primeras pruebas con pulsos largos descargaban el condensador y podian
+  provocar maniobras debiles. La prueba final usa pulsos reales de 50 ms y 15 s
+  entre maniobras para permitir la recarga.
 
 ## Montaje recomendado
 
@@ -227,9 +252,9 @@ VCC, GND, EEP y los canales principales eran funcionales.
 ## Pendientes de cierre
 
 - Medir consumo real en reposo, Wi-Fi activo y deep sleep.
-- Probar las cuatro valvulas reales conectadas, no solo la inversion de polaridad
-  medida con multimetro.
-- Confirmar si un condensador de 4700 uF basta para todas las valvulas o conviene
-  colocar uno por modulo DRV8833.
+- Probar una temporada completa en exterior para confirmar margen energetico con
+  dias nublados.
+- Medir la tension real del condensador antes y despues de cada pulso para
+  decidir si conviene aumentar capacidad o colocar uno por modulo DRV8833.
 - Guardar fotos del montaje final en `hardware/datasheets` o en una nueva
   carpeta `hardware/esquemas`.
