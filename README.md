@@ -29,28 +29,28 @@ El proyecto combina:
 
 ## Fotos del montaje
 
-Reserva estos huecos para documentar el montaje físico conforme avances.
+Registro visual del montaje físico, desde las primeras soldaduras hasta la caja
+final instalada.
 
 ### Soldaduras
 
-![Soldaduras de la placa](hardware/esquemas/foto-soldaduras.jpg)
+![Soldaduras de la placa perforada](hardware/imagenes/soldadura_1.jpg)
 
-> Pendiente: añadir una foto nítida de las soldaduras de la Lolin32, DRV8833,
-> MT3608, divisor de batería y buses de alimentación.
+![Detalle adicional de soldadura](hardware/imagenes/soldadura_2.heic)
 
 ### Conexiones
 
-![Conexiones del controlador](hardware/esquemas/foto-conexiones.jpg)
+![Circuito de prueba y conexiones](hardware/imagenes/circuito_prueba_1.jpg)
 
-> Pendiente: añadir una foto cenital con clemas, masa común, salidas a válvulas
-> y cableado de señales GPIO.
+![Detalle del circuito de prueba](hardware/imagenes/circuito_prueba_2.jpg)
 
 ### Proyecto final
 
-![Proyecto final instalado](hardware/esquemas/foto-proyecto-final.jpg)
+![Caja final del controlador](hardware/imagenes/montaje_final_caja.heic)
 
-> Pendiente: añadir una foto de la caja final con panel solar, batería y salidas
-> al jardín.
+![Panel solar instalado](hardware/imagenes/montaje_final_panel.heic)
+
+![Arqueta de riego](hardware/imagenes/montaje_final_arqueta.heic)
 
 ## Arquitectura
 
