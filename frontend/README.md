@@ -115,7 +115,11 @@ resolver. Si el firmware publica `{"active":false,"resolved":false}` en
 `riego/device/problem`, el panel oculta la tarjeta de incidencia. También ignora
 incidencias resueltas antiguas para no mostrar avisos históricos retenidos.
 
-Las rutinas se guardan también en `localStorage` para conservarlas en el navegador. Se pueden nombrar, activar, desactivar y eliminar individualmente. El mensaje MQTT tiene esta estructura:
+Las rutinas se comparten entre dispositivos mediante el mensaje retenido de
+`riego/programacion/cmd`. Al conectar, la web lee ese retained y actualiza la
+lista visible; `localStorage` queda solo como caché local mientras no haya
+conexión MQTT. Se pueden nombrar, activar, desactivar y eliminar
+individualmente. El mensaje MQTT tiene esta estructura:
 
 ```json
 {

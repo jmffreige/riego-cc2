@@ -132,6 +132,34 @@ function getSavedRoutines() {
   return [createRoutine(0)];
 }
 
+function parseProgramPayload(rawPayload) {
+  const payload = rawPayload.trim();
+  if (!payload) return null;
+
+  try {
+    const program = JSON.parse(payload);
+    const routines = Array.isArray(program) ? program : program?.routines;
+    if (Array.isArray(routines) && routines.length > 0) {
+      return {
+        version: Number.isInteger(program?.version) ? program.version : 2,
+        routines: routines.map(normalizeRoutine),
+      };
+    }
+  } catch {
+    // Ignoramos retained antiguos o mensajes manuales que no sean JSON de programación.
+  }
+
+  return null;
+}
+
+function applyRemoteProgram(rawPayload) {
+  const program = parseProgramPayload(rawPayload);
+  if (!program) return;
+
+  localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(program));
+  renderRoutines(program.routines);
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -787,6 +815,7 @@ function connectMqtt(config) {
         SLEEP_TOPIC,
         PROBLEM_TOPIC,
         ROUTINE_STATE_TOPIC,
+        PROGRAM_TOPIC,
       ],
       { qos: 1 },
       (error) => showToast(error ? "No se pudo consultar el estado del programador." : "Programador conectado"),
@@ -801,6 +830,7 @@ function connectMqtt(config) {
     if (topic === SLEEP_TOPIC) setSleepState(payload.toString());
     if (topic === PROBLEM_TOPIC) setProblemState(payload.toString());
     if (topic === ROUTINE_STATE_TOPIC) setRoutineState(payload.toString());
+    if (topic === PROGRAM_TOPIC) applyRemoteProgram(payload.toString());
   });
   client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));
   client.on("offline", () => setConnectionStatus("error", "Sin conexión"));
