@@ -37,6 +37,22 @@ Usa dos clemas como entrada general de batería en la placa perforada:
 
 > Nota: Usa clemas, Wagos o empalme soldado para unir el portapilas al cablecito JST.
 
+### Medición de batería con divisor 100k/100k
+
+La batería son dos celdas Li-ion en paralelo (**1S2P**), así que el voltaje máximo
+del pack sigue siendo **4.20 V**. Para que el ESP32 pueda medirlo sin superar
+3.3 V en el ADC, se usa un divisor resistivo externo 1:2.
+
+- Clema **BATERIA+** -> resistencia **100 kΩ** -> punto medio del divisor. **[🧠 LÓGICA]**
+- Punto medio del divisor -> pin **GPIO 34** de la Lolin32. **[🧠 LÓGICA]**
+- Punto medio del divisor -> resistencia **100 kΩ** -> **BATERIA-/GND**. **[🧠 LÓGICA]**
+
+Con la batería llena a 4.20 V, el GPIO34 recibe aproximadamente 2.10 V. El GND
+de la batería ya es común con la Lolin32, el MT3608 y los DRV8833.
+
+> Importante: este divisor solo es válido para un pack 1S/1S2P. No usarlo con
+> celdas en serie, porque el punto medio podría superar el rango seguro del ESP32.
+
 ### Panel solar: 5 W
 
 - Cable **ROJO (+)** -> a un pin de una clema -> cable hasta el pin **5V** o **USB/VBUS** de la Lolin32. **[⚡ POTENCIA]**
@@ -83,19 +99,24 @@ Alimentación bruta y activación de los dos chips DRV8833.
 
 Estas son las órdenes de apertura y cierre que viajan desde el ESP32 hasta los puentes H. Todas estas conexiones son **[🧠 LÓGICA]**.
 
+> Importante: esta polaridad está verificada con las válvulas reales. En este
+> montaje los pines `IN1/IN3` de cada DRV cierran y los pines `IN2/IN4` abren.
+> Si se invierten los dos cables de una válvula en su clema, también se invierte
+> su sentido físico.
+
 ### Módulo DRV8833 Nº1: zonas 1 y 2
 
-- Pin **GPIO 4** de la Lolin32 -> pin **IN1**: abre zona 1.
-- Pin **GPIO 16** de la Lolin32 -> pin **IN2**: cierra zona 1.
-- Pin **GPIO 17** de la Lolin32 -> pin **IN3**: abre zona 2.
-- Pin **GPIO 18** de la Lolin32 -> pin **IN4**: cierra zona 2.
+- Pin **GPIO 4** de la Lolin32 -> pin **IN1**: cierra zona 1.
+- Pin **GPIO 16** de la Lolin32 -> pin **IN2**: abre zona 1.
+- Pin **GPIO 17** de la Lolin32 -> pin **IN3**: cierra zona 2.
+- Pin **GPIO 18** de la Lolin32 -> pin **IN4**: abre zona 2.
 
 ### Módulo DRV8833 Nº2: zonas 3 y 4
 
-- Pin **GPIO 26** de la Lolin32 -> pin **IN1**: abre zona 3.
-- Pin **GPIO 27** de la Lolin32 -> pin **IN2**: cierra zona 3.
-- Pin **GPIO 32** de la Lolin32 -> pin **IN3**: abre zona 4.
-- Pin **GPIO 33** de la Lolin32 -> pin **IN4**: cierra zona 4.
+- Pin **GPIO 26** de la Lolin32 -> pin **IN1**: cierra zona 3.
+- Pin **GPIO 27** de la Lolin32 -> pin **IN2**: abre zona 3.
+- Pin **GPIO 32** de la Lolin32 -> pin **IN3**: cierra zona 4.
+- Pin **GPIO 33** de la Lolin32 -> pin **IN4**: abre zona 4.
 
 ## 5. Salidas a las válvulas Rain Bird
 
@@ -107,3 +128,26 @@ Conexiones desde los módulos DRV8833 hasta las clemas atornillables donde irán
 - **Válvula 4:** pines **OUT3** y **OUT4** del DRV Nº2 -> clema de la zona 4.
 
 > Nota: Si alguna válvula se cierra al darle a "Abrir", simplemente desatornilla sus dos cables de la clema, dales la vuelta e inviértelos, o cámbialo en el código de C++.
+
+> Importante: las salidas de válvulas no comparten común entre ellas. Cada
+> electroválvula usa solamente su pareja `OUTx/OUTy`; no unir negativos ni
+> retornos de válvulas distintas. Lo que sí debe ser común es la masa electrónica:
+> batería, Lolin32, MT3608 y GND de ambos DRV8833.
+
+## 6. Notas de firmware relacionadas con el cableado
+
+- Los pulsos de apertura/cierre son de **50 ms**.
+- Entre cerrar una zona y abrir la siguiente el firmware espera **15 s** para
+  que el condensador de 4700 uF recupere carga.
+- El entorno PlatformIO `valve_test` permite probar apertura y cierre de cada
+  zona sin Wi-Fi ni deep sleep:
+
+```powershell
+pio run -d .\firmware -e valve_test --target upload
+```
+
+- Para volver al firmware real:
+
+```powershell
+pio run -d .\firmware -e esp32dev --target upload
+```

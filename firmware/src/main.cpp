@@ -15,8 +15,9 @@ namespace {
 constexpr uint8_t ZONE_COUNT = 4;
 constexpr uint8_t MAX_ROUTINE_STEPS = 8;
 constexpr uint8_t MAX_PROGRAM_ROUTINES = 8;
-constexpr uint8_t BATTERY_PIN = 35;
+constexpr uint8_t BATTERY_PIN = 34;
 constexpr uint16_t VALVE_PULSE_MS = 50;
+constexpr uint32_t VALVE_RECHARGE_MS = 15000;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t MQTT_TIMEOUT_MS = 15000;
 constexpr uint32_t MQTT_LISTEN_WINDOW_MS = 7000;
@@ -28,10 +29,11 @@ constexpr uint64_t SCHEDULE_WAKE_EARLY_SECONDS = 5;
 constexpr uint64_t WAKE_GRACE_SECONDS = 180;
 constexpr uint64_t US_PER_SECOND = 1000ULL * 1000ULL;
 
-// Lolin32 Lite battery input uses an onboard 1:2 divider on GPIO35.
+// External 100k/100k divider from the 1S2P Li-ion pack to GPIO34.
+// Calibrated from 2.08-2.09 V measured at GPIO34 while the ADC reported 3.99 V.
 constexpr float ADC_REFERENCE_V = 3.3f;
 constexpr float ADC_MAX = 4095.0f;
-constexpr float BATTERY_DIVIDER_FACTOR = 2.0f;
+constexpr float BATTERY_DIVIDER_FACTOR = 2.09f;
 constexpr float BATTERY_EMPTY_V = 3.20f;
 constexpr float BATTERY_FULL_V = 4.20f;
 
@@ -79,10 +81,10 @@ struct RetainedCheckProblem {
 };
 
 const ValveZone zones[ZONE_COUNT] = {
-  {4, 16, "riego/zona1/cmd", "riego/zona1/state"},
-  {17, 18, "riego/zona2/cmd", "riego/zona2/state"},
-  {26, 27, "riego/zona3/cmd", "riego/zona3/state"},
-  {32, 33, "riego/zona4/cmd", "riego/zona4/state"},
+  {16, 4, "riego/zona1/cmd", "riego/zona1/state"},
+  {18, 17, "riego/zona2/cmd", "riego/zona2/state"},
+  {27, 26, "riego/zona3/cmd", "riego/zona3/state"},
+  {33, 32, "riego/zona4/cmd", "riego/zona4/state"},
 };
 
 const char* ROUTINE_CONFIG_TOPIC = "riego/routine/config";
@@ -106,6 +108,7 @@ RTC_DATA_ATTR uint8_t programRoutineCount = 0;
 RTC_DATA_ATTR uint32_t lastStartedRoutineHash = 0;
 RTC_DATA_ATTR int32_t lastStartedDayKey = -1;
 RTC_DATA_ATTR RetainedCheckProblem retainedCheckProblem = {};
+RTC_DATA_ATTR bool retainedProblemResolutionPublished = false;
 RTC_DATA_ATTR uint32_t lastRoutineSleepSeconds = 0;
 
 uint64_t nextSleepSeconds = DEFAULT_SLEEP_SECONDS;
@@ -232,7 +235,17 @@ void publishRetainedCheckProblem(bool resolved) {
 
   if (resolved) {
     memset(&retainedCheckProblem, 0, sizeof(retainedCheckProblem));
+    retainedProblemResolutionPublished = true;
   }
+}
+
+void publishNoProblemState() {
+  if (!mqtt.connected()) {
+    return;
+  }
+
+  mqtt.publish(PROBLEM_TOPIC, "{\"active\":false,\"resolved\":false}", true);
+  retainedProblemResolutionPublished = false;
 }
 
 const char* sleepWakeReason(uint64_t sleepSeconds) {
@@ -285,6 +298,13 @@ void closeRoutineOpenZone() {
   routine.openZoneIndex = -1;
 }
 
+void waitForValveRecharge(const char* reason) {
+  Serial.printf("Esperando %lu ms para recargar condensador antes de %s\n",
+                static_cast<unsigned long>(VALVE_RECHARGE_MS),
+                reason);
+  delay(VALVE_RECHARGE_MS);
+}
+
 void clearRoutine(bool resetSummary = true) {
   routine.active = false;
   routine.openZoneIndex = -1;
@@ -330,14 +350,14 @@ void startRoutineStep(uint8_t stepIndex) {
   publishRoutineState("watering");
 }
 
-void advanceRoutineAfterCheck() {
+void advanceRoutineAfterCheck(bool resumeCurrentStep = false) {
   if (!routine.active) {
     return;
   }
 
   Serial.println("Rutina activa: programando siguiente zona tras comprobar MQTT");
 
-  const uint8_t nextStepIndex = routine.currentStepIndex + 1;
+  const uint8_t nextStepIndex = resumeCurrentStep ? routine.currentStepIndex : routine.currentStepIndex + 1;
   if (nextStepIndex >= routine.stepCount) {
     Serial.println("Rutina finalizada");
     completedRoutineId = routine.id;
@@ -347,6 +367,9 @@ void advanceRoutineAfterCheck() {
     return;
   }
 
+  if (!resumeCurrentStep) {
+    waitForValveRecharge("abrir la siguiente zona");
+  }
   startRoutineStep(nextStepIndex);
 }
 
@@ -442,7 +465,11 @@ bool secondsUntilRoutine(const ScheduledRoutine& scheduled, time_t now, int64_t&
 
 void startScheduledRoutine(const ScheduledRoutine& scheduled, int32_t dayKey) {
   Serial.printf("Arrancando rutina programada %lu\n", static_cast<unsigned long>(scheduled.hash));
+  const bool hadOpenZone = routine.openZoneIndex >= 0;
   closeRoutineOpenZone();
+  if (hadOpenZone) {
+    waitForValveRecharge("abrir la rutina programada");
+  }
 
   routine.active = true;
   routine.id = scheduled.hash;
@@ -636,12 +663,23 @@ void applyRoutineConfig(const byte* payload, unsigned int length) {
 
   const bool enabled = doc["enabled"] | false;
   if (!enabled) {
-    Serial.println("Rutina desactivada por MQTT");
-    closeRoutineOpenZone();
-    clearRoutine();
+    if (routine.active && routine.programHash != 0) {
+      Serial.println("Rutina inmediata desactivada ignorada: hay una programacion en curso");
+      publishRoutineState(routine.openZoneIndex >= 0 ? "watering" : "scheduled");
+      return;
+    }
+
+    Serial.println("Rutina inmediata desactivada por MQTT");
+    if (routine.active) {
+      closeRoutineOpenZone();
+      clearRoutine();
+      publishRoutineState("disabled");
+    } else {
+      clearRoutine();
+      publishRoutineState("idle");
+    }
     completedRoutineId = 0;
     routineFinishedThisWake = false;
-    publishRoutineState("disabled");
     return;
   }
 
@@ -691,7 +729,11 @@ void applyRoutineConfig(const byte* payload, unsigned int length) {
   }
 
   Serial.printf("Rutina %lu recibida: %u pasos\n", static_cast<unsigned long>(id), parsedCount);
+  const bool hadOpenZone = routine.openZoneIndex >= 0;
   closeRoutineOpenZone();
+  if (hadOpenZone) {
+    waitForValveRecharge("abrir la rutina inmediata");
+  }
 
   routine.active = true;
   routine.id = id;
@@ -864,6 +906,14 @@ void waitForRetainedCommands() {
   }
 }
 
+void flushMqttPublishes(uint32_t durationMs = 500) {
+  const uint32_t start = millis();
+  while (mqtt.connected() && millis() - start < durationMs) {
+    mqtt.loop();
+    delay(25);
+  }
+}
+
 void goToSleep(uint64_t sleepSeconds) {
   setAllValvePinsLow();
 
@@ -875,7 +925,7 @@ void goToSleep(uint64_t sleepSeconds) {
     publishRetainedCheckProblem(false);
     publishSleepTelemetry(sleepSeconds);
     mqtt.publish(STATUS_TOPIC, "sleeping", true);
-    mqtt.loop();
+    flushMqttPublishes();
     mqtt.disconnect();
   }
 
@@ -903,6 +953,7 @@ void setup() {
   configureValvePins();
 
   bool pendingRoutineAdvance = false;
+  bool resumeRoutineStep = false;
   bool routinePollWake = false;
   if (routine.active) {
     if (routine.openZoneIndex >= 0) {
@@ -930,6 +981,7 @@ void setup() {
     } else {
       Serial.println("Rutina activa sin zona abierta: comprobando antes de avanzar");
       pendingRoutineAdvance = true;
+      resumeRoutineStep = true;
     }
   }
 
@@ -942,14 +994,20 @@ void setup() {
 
   if (mqttReady) {
     publishBattery();
-    publishRoutineState(routine.active ? "watering" : (routineFinishedThisWake ? "finished" : "idle"));
+    publishRoutineState((routine.active && routine.openZoneIndex >= 0)
+                          ? "watering"
+                          : (routineFinishedThisWake ? "finished" : "idle"));
     waitForRetainedCommands();
-    publishRetainedCheckProblem(true);
+    if (retainedCheckProblem.pending) {
+      publishRetainedCheckProblem(true);
+    } else if (retainedProblemResolutionPublished) {
+      publishNoProblemState();
+    }
   }
 
   if (pendingRoutineAdvance) {
     if (routine.active && mqttReady) {
-      advanceRoutineAfterCheck();
+      advanceRoutineAfterCheck(resumeRoutineStep);
     } else if (routine.active) {
       nextSleepSeconds = ROUTINE_POLL_SECONDS;
     } else {
