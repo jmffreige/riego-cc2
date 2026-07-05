@@ -1,4 +1,4 @@
-const CACHE_NAME = "control-cc2-v14";
+const CACHE_NAME = "control-cc2-v18";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -29,18 +29,18 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const networkResponse = fetch(event.request)
-        .then((response) => {
-          if (response.ok || response.type === "opaque") {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          }
-          return response;
-        })
-        .catch(() => cachedResponse || caches.match("./index.html"));
-
-      return cachedResponse || networkResponse;
-    }),
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok || response.type === "opaque") {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() =>
+        caches.match(event.request).then((cachedResponse) =>
+          cachedResponse || (event.request.mode === "navigate" ? caches.match("./index.html") : Response.error()),
+        ),
+      ),
   );
 });

@@ -53,6 +53,7 @@ const elements = {
   zonesGrid: document.querySelector("#zones-grid"),
   programForm: document.querySelector("#program-form"),
   programSummary: document.querySelector("#program-summary"),
+  saveProgram: document.querySelector(".primary-button--save"),
   routinesList: document.querySelector("#routines-list"),
   addRoutine: document.querySelector("#add-routine"),
   stopCycle: document.querySelector("#stop-cycle"),
@@ -79,6 +80,9 @@ let sleepState = null;
 let activeZoneId = null;
 let cycleRunning = false;
 let deviceStatus = "unknown";
+let routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0 };
+let programBaseline = "";
+const zoneStates = new Map();
 
 function createRoutine(index = 0) {
   return {
@@ -150,6 +154,41 @@ function parseProgramPayload(rawPayload) {
   }
 
   return null;
+}
+
+function canonicalRoutine(routine) {
+  return {
+    id: routine.id,
+    name: String(routine.name || "").trim(),
+    enabled: routine.enabled !== false,
+    dayMode: routine.dayMode === "selected" ? "selected" : "daily",
+    days: [...new Set((routine.days || []).map(Number).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b),
+    startTime: routine.startTime || "",
+    durations: ZONES.map((_, index) => Number(routine.durations?.[index]) || 0),
+  };
+}
+
+function canonicalProgram(routines) {
+  return JSON.stringify({
+    version: 2,
+    routines: routines.map(canonicalRoutine),
+  });
+}
+
+function currentProgramSignature() {
+  return canonicalProgram(readAllRoutines());
+}
+
+function setProgramBaseline(routines) {
+  programBaseline = canonicalProgram(routines);
+}
+
+function hasProgramChanges() {
+  return currentProgramSignature() !== programBaseline;
+}
+
+function updateSaveButton() {
+  elements.saveProgram.disabled = !hasProgramChanges();
 }
 
 function applyRemoteProgram(rawPayload) {
@@ -292,6 +331,7 @@ function routineMarkup(routine, index) {
 function renderRoutines(routines) {
   elements.routinesList.innerHTML = routines.map(routineMarkup).join("");
   elements.routinesList.querySelectorAll(".routine-card").forEach(updateRoutinePreview);
+  setProgramBaseline(routines);
   updateProgramSummary();
   updateRunButtons();
 }
@@ -357,6 +397,7 @@ function updateProgramSummary() {
   elements.programSummary.textContent =
     `${routines.length} ${routines.length === 1 ? "rutina" : "rutinas"} · ` +
     `${activeCount} ${activeCount === 1 ? "activa" : "activas"}`;
+  updateSaveButton();
 }
 
 function validateRoutine(card) {
@@ -485,18 +526,73 @@ function setDeviceStatus(rawPayload) {
   }
 }
 
+function badgeMarkup(label) {
+  return `<span aria-hidden="true"></span>${label}`;
+}
+
+function renderZoneStatus(zoneId) {
+  const card = document.querySelector(`#zone-card-${zoneId}`);
+  const badge = document.querySelector(`#zone-badge-${zoneId}`);
+  if (!card || !badge) return;
+
+  const openZone = Number(routineState.openZone) || 0;
+  const routineStatus = routineState.status;
+  let displayState = "unknown";
+  let label = "Sin datos";
+
+  if (routineStatus === "watering") {
+    displayState = openZone > 0 && zoneId === openZone ? "watering" : "off";
+    label = openZone > 0 && zoneId === openZone ? "Regando" : "Cerrada";
+  } else if (["finished", "disabled", "stopped"].includes(routineStatus)) {
+    displayState = "off";
+    label = "Cerrada";
+  } else if (routineStatus === "scheduled") {
+    displayState = "queued";
+    label = "Programada";
+  } else {
+    const zoneState = zoneStates.get(zoneId);
+    if (zoneState === "on") {
+      displayState = "watering";
+      label = "Regando";
+    } else if (zoneState === "off") {
+      displayState = "off";
+      label = "En espera";
+    }
+  }
+
+  card.dataset.state = displayState;
+  badge.innerHTML = badgeMarkup(label);
+}
+
+function renderAllZoneStatuses() {
+  ZONES.forEach((zone) => renderZoneStatus(zone.id));
+}
+
 function setRoutineState(rawPayload) {
   try {
     const routine = JSON.parse(rawPayload.trim());
     if (!routine || typeof routine !== "object") return;
+    routineState = {
+      status: typeof routine.status === "string" ? routine.status : "idle",
+      openZone: Number(routine.openZone) || 0,
+      step: Number(routine.step) || 0,
+      stepCount: Number(routine.stepCount) || 0,
+    };
+    renderAllZoneStatuses();
+
     const nextWakeSeconds = Number(routine.nextWakeSeconds);
     if (Number.isFinite(nextWakeSeconds) && nextWakeSeconds > 0) {
       setSleepFallback(nextWakeSeconds, routine.status);
     }
 
-    if (routine.status === "watering" && Number(routine.openZone) > 0) {
-      elements.cycleStatus.textContent = `Rutina activa · Regando Zona ${routine.openZone}`;
-      elements.cycleDetail.textContent = `${routine.step || 1} de ${routine.stepCount || "?"} pasos.`;
+    if (routineState.status === "watering") {
+      if (routineState.openZone > 0) {
+        elements.cycleStatus.textContent = `Rutina activa · Regando Zona ${routineState.openZone}`;
+        elements.cycleDetail.textContent = `${routine.step || 1} de ${routine.stepCount || "?"} pasos.`;
+      } else {
+        elements.cycleStatus.textContent = "Rutina activa · sin zona abierta";
+        elements.cycleDetail.textContent = "Todas las zonas están cerradas mientras se confirma el siguiente paso.";
+      }
       return;
     }
     if (routine.status === "scheduled") {
@@ -517,14 +613,8 @@ function setZoneState(zoneId, rawState) {
   const state = rawState.trim().toUpperCase();
   if (state !== "ON" && state !== "OFF") return;
 
-  const normalizedState = state.toLowerCase();
-  const card = document.querySelector(`#zone-card-${zoneId}`);
-  const badge = document.querySelector(`#zone-badge-${zoneId}`);
-  card.dataset.state = normalizedState;
-  badge.innerHTML =
-    normalizedState === "on"
-      ? '<span aria-hidden="true"></span>Regando'
-      : '<span aria-hidden="true"></span>En espera';
+  zoneStates.set(zoneId, state.toLowerCase());
+  renderZoneStatus(zoneId);
 }
 
 function parseBatteryPayload(rawPayload) {
@@ -998,11 +1088,17 @@ elements.routinesList.addEventListener("click", (event) => {
 });
 elements.programForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!hasProgramChanges()) {
+    showToast("No hay cambios nuevos que guardar.");
+    return;
+  }
+
   const routines = validateAllRoutines();
   if (!routines) return;
 
   const program = { version: 2, routines };
   localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(program));
+  setProgramBaseline(routines);
   updateProgramSummary();
 
   if (client?.connected) {
