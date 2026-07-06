@@ -3,7 +3,6 @@
 ## Credenciales
 * **Usuario ESP32**: jardinero_cc2
 * **Usuario PWA**: usuario_cc2
-* **Usuario admin OTA**: crear uno específico para publicar en `riego/device/ota/cmd`
 * **Password**: Pepe-cc2
 
 ## General
@@ -13,16 +12,11 @@
 
 Capacidad para hasta 100 conexiones y tráfico de hasta 10 GB.
 
-## Permisos recomendados
+## OTA
 
-* `usuario_cc2` (PWA normal): publicar en `riego/programacion/cmd`,
-  `riego/routine/config` y `riego/zona+/cmd`; suscribirse a `riego/#`; sin
-  permiso de publicación en `riego/device/ota/cmd`.
-* `jardinero_cc2` (ESP32): suscribirse a `riego/programacion/cmd`,
-  `riego/routine/config`, `riego/device/ota/cmd` y `riego/zona+/cmd`; publicar
-  en `riego/device/#`, `riego/routine/state` y `riego/zona+/state`.
-* Admin OTA: publicar en `riego/device/ota/cmd` y suscribirse a
-  `riego/device/ota/state`.
+La actualización OTA se activa manualmente publicando un JSON retenido en
+`riego/device/ota/cmd`. No se configuran permisos especiales por usuario en
+HiveMQ; basta con no exponer esa acción en la PWA normal.
 
 ## Información del Cluster
 * **Plan** Serverless

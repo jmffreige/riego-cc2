@@ -6,7 +6,7 @@
 
 ## OTA
 
-* `riego/device/ota/cmd`: comando retenido, solo publicable por admin OTA.
+* `riego/device/ota/cmd`: comando retenido que se publica manualmente al querer actualizar.
 * `riego/device/ota/state`: estado retenido publicado por el ESP32.
 
 Ejemplo:

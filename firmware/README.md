@@ -170,10 +170,10 @@ La PWA debe publicar comandos con `retain: true`.
 ## Actualización OTA HTTP
 
 El firmware acepta una actualización manual por HTTPS cuando recibe un comando
-retenido en `riego/device/ota/cmd`. El usuario normal de la PWA no debe poder
-publicar en este topic; debe quedar reservado a un usuario admin en HiveMQ. El
-ESP32 solo necesita permiso de lectura sobre `riego/device/ota/cmd` y permiso de
-publicación sobre `riego/device/ota/state`.
+retenido en `riego/device/ota/cmd`. HiveMQ no necesita permisos especiales para
+este flujo: la actualización se activa solo cuando se publica manualmente ese
+comando. El ESP32 lee la orden, descarga el binario desde GitHub Releases y
+publica el resultado en `riego/device/ota/state`.
 
 Ejemplo de comando:
 
@@ -221,12 +221,18 @@ Para desarmar una orden retenida sin instalar nada:
 {"enabled": false}
 ```
 
-Para preparar un release en GitHub:
+### Preparar un release OTA en GitHub
+
+Repositorio de releases:
+`https://github.com/jmffreige/riego-cc2/releases`
 
 1. Cambiar `FIRMWARE_VERSION` en `platformio.ini`.
+   La versión no debe contener espacios ni comillas; usa algo como
+   `2026.07.06-ota2` o `firmware-v2026.07.06-2`.
 2. Compilar:
 
    ```powershell
+   cd C:\Users\ferna\OneDrive\Proyecto\riego-cc2\firmware
    pio run -e esp32dev
    ```
 
@@ -236,10 +242,33 @@ Para preparar un release en GitHub:
    Get-FileHash .pio\build\esp32dev\firmware.bin -Algorithm SHA256
    ```
 
-4. Crear un release en `https://github.com/jmffreige/riego-cc2/releases` con un
-   tag igual a la versión, por ejemplo `firmware-v2026.07.06-2`.
+4. Crear un release con un tag igual a la versión, por ejemplo
+   `2026.07.06-ota2`.
 5. Adjuntar como asset el archivo `.pio\build\esp32dev\firmware.bin`.
 6. Publicar en `riego/device/ota/cmd` el JSON con esa URL y SHA-256.
+
+Con GitHub CLI, desde la raíz del repositorio:
+
+```powershell
+gh release create 2026.07.06-ota2 firmware/.pio/build/esp32dev/firmware.bin --repo jmffreige/riego-cc2 --title "Firmware 2026.07.06-ota2" --notes "Firmware OTA para riego CC2"
+```
+
+La URL del asset será:
+
+```text
+https://github.com/jmffreige/riego-cc2/releases/download/2026.07.06-ota2/firmware.bin
+```
+
+Ejemplo de orden retenida:
+
+```json
+{
+  "enabled": true,
+  "version": "2026.07.06-ota2",
+  "url": "https://github.com/jmffreige/riego-cc2/releases/download/2026.07.06-ota2/firmware.bin",
+  "sha256": "HASH_SHA256_DEL_BINARIO"
+}
+```
 
 Ejemplo de telemetría de batería:
 
