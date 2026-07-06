@@ -81,6 +81,11 @@
         color: #65e49b;
       }
 
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.48;
+      }
+
       .grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -123,7 +128,7 @@
         </label>
         <label>
           Usuario
-          <input id="username" value="usuario_cc2" required />
+          <input id="username" value="admin_cc2" required />
         </label>
         <label>
           Password
@@ -147,7 +152,9 @@
       </label>
 
       <div class="actions">
-        <button type="submit">Publicar OTA retenida</button>
+        <button id="connect-button" type="button">Conectar MQTT</button>
+        <button class="secondary" id="disconnect-button" type="button" disabled>Desconectar</button>
+        <button id="publish-button" type="submit" disabled>Publicar OTA retenida</button>
         <button class="secondary" id="clear-command" type="button">Desarmar OTA retenida</button>
       </div>
     </form>
@@ -158,10 +165,21 @@
     <script>
       const form = document.querySelector("#ota-form");
       const log = document.querySelector("#log");
+      const connectButton = document.querySelector("#connect-button");
+      const disconnectButton = document.querySelector("#disconnect-button");
+      const publishButton = document.querySelector("#publish-button");
       const clearButton = document.querySelector("#clear-command");
+      let client = null;
 
       function write(message) {
         log.textContent = `${new Date().toLocaleTimeString()} - ${message}\n${log.textContent}`;
+      }
+
+      function setConnected(connected) {
+        connectButton.disabled = connected;
+        disconnectButton.disabled = !connected;
+        publishButton.disabled = !connected;
+        clearButton.disabled = !connected;
       }
 
       function readConfig() {
@@ -174,9 +192,15 @@
         };
       }
 
-      function connectAndPublish(payload) {
+      function connectMqtt() {
         const config = readConfig();
-        const client = mqtt.connect(`wss://${config.host}:${config.port}/mqtt`, {
+        if (client?.connected) {
+          write("Ya conectado.");
+          return;
+        }
+
+        write(`Conectando a wss://${config.host}:${config.port}/mqtt como ${config.username}...`);
+        client = mqtt.connect(`wss://${config.host}:${config.port}/mqtt`, {
           username: config.username,
           password: config.password,
           clientId: `riego-ota-${Date.now().toString(36)}`,
@@ -187,15 +211,10 @@
         });
 
         client.on("connect", () => {
-          write("Conectado. Publicando con retain=true y QoS 1...");
-          client.subscribe("riego/device/ota/state", { qos: 1 });
-          client.publish(config.topic, payload, { qos: 1, retain: true }, (error) => {
-            if (error) {
-              write(`Error publicando: ${error.message}`);
-              client.end(true);
-              return;
-            }
-            write(`Publicado en ${config.topic}: ${payload}`);
+          write("Conectado a MQTT. Puedes publicar la orden OTA.");
+          setConnected(true);
+          client.subscribe("riego/device/ota/state", { qos: 1 }, (error) => {
+            write(error ? `No se pudo suscribir a ota/state: ${error.message}` : "Suscrito a riego/device/ota/state.");
           });
         });
 
@@ -203,16 +222,40 @@
           write(`${topic}: ${message.toString()}`);
         });
 
+        client.on("close", () => {
+          write("Conexion MQTT cerrada.");
+          setConnected(false);
+        });
+
         client.on("error", (error) => {
           write(`Error MQTT: ${error.message}`);
           client.end(true);
         });
-
-        setTimeout(() => {
-          write("Cerrando conexion.");
-          client.end(true);
-        }, 15000);
       }
+
+      function disconnectMqtt() {
+        if (!client) return;
+        client.end(true);
+      }
+
+      function publishRetained(payload) {
+        if (!client?.connected) {
+          write("Primero conecta a MQTT.");
+          return;
+        }
+
+        const config = readConfig();
+        client.publish(config.topic, payload, { qos: 1, retain: true }, (error) => {
+          if (error) {
+            write(`Error publicando: ${error.message}`);
+            return;
+          }
+          write(`Publicado con retain=true en ${config.topic}: ${payload}`);
+        });
+      }
+
+      connectButton.addEventListener("click", connectMqtt);
+      disconnectButton.addEventListener("click", disconnectMqtt);
 
       form.addEventListener("submit", (event) => {
         event.preventDefault();
@@ -222,12 +265,14 @@
           write("El payload no es JSON valido.");
           return;
         }
-        connectAndPublish(document.querySelector("#payload").value);
+        publishRetained(document.querySelector("#payload").value);
       });
 
       clearButton.addEventListener("click", () => {
-        connectAndPublish('{"enabled": false}');
+        publishRetained('{"enabled": false}');
       });
+
+      setConnected(false);
     </script>
   </body>
 </html>

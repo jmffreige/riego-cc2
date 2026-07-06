@@ -249,8 +249,10 @@ Repositorio de releases:
 
 Si el Web Client de HiveMQ no permite marcar `retain`, no usarlo para OTA: el
 ESP32 podría estar dormido y perdería la orden. En su lugar, abrir en local
-`tools/ota-publisher.html`, rellenar contraseña y payload, y pulsar **Publicar
-OTA retenida**. Esa herramienta publica con `retain: true` y QoS 1 usando WSS.
+`tools/ota-publisher.html`, conectar con el usuario `admin_cc2`, rellenar
+contraseña y payload, y pulsar primero **Conectar MQTT**. Cuando el log confirme
+la conexión, pulsar **Publicar OTA retenida**. Esa herramienta publica con
+`retain: true` y QoS 1 usando WSS.
 
 Con GitHub CLI, desde la raíz del repositorio:
 
