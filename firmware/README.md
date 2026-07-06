@@ -247,6 +247,11 @@ Repositorio de releases:
 5. Adjuntar como asset el archivo `.pio\build\esp32dev\firmware.bin`.
 6. Publicar en `riego/device/ota/cmd` el JSON con esa URL y SHA-256.
 
+Si el Web Client de HiveMQ no permite marcar `retain`, no usarlo para OTA: el
+ESP32 podría estar dormido y perdería la orden. En su lugar, abrir en local
+`tools/ota-publisher.html`, rellenar contraseña y payload, y pulsar **Publicar
+OTA retenida**. Esa herramienta publica con `retain: true` y QoS 1 usando WSS.
+
 Con GitHub CLI, desde la raíz del repositorio:
 
 ```powershell

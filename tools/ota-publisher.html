@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Riego CC2 OTA Publisher</title>
+    <script src="https://unpkg.com/mqtt@5.15.1/dist/mqtt.min.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f1f1a;
+        color: #eef7f2;
+      }
+
+      body {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 18px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+      }
+
+      p {
+        color: #a9bbb2;
+      }
+
+      form,
+      pre {
+        border: 1px solid #29473d;
+        border-radius: 8px;
+        background: #132821;
+      }
+
+      form {
+        display: grid;
+        gap: 16px;
+        padding: 18px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: #b8cbc2;
+        font-size: 0.9rem;
+      }
+
+      input,
+      textarea,
+      button {
+        min-height: 42px;
+        border: 1px solid #365c50;
+        border-radius: 6px;
+        background: #091711;
+        color: #f3fbf7;
+        font: inherit;
+      }
+
+      input,
+      textarea {
+        padding: 0 12px;
+      }
+
+      textarea {
+        min-height: 120px;
+        padding-block: 12px;
+      }
+
+      button {
+        cursor: pointer;
+        padding: 0 16px;
+        background: #65e49b;
+        color: #092015;
+        font-weight: 800;
+      }
+
+      button.secondary {
+        background: transparent;
+        color: #65e49b;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      pre {
+        min-height: 90px;
+        padding: 14px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 680px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Riego CC2 OTA Publisher</h1>
+    <p>Publica la orden OTA con retain para que el ESP32 la lea cuando despierte.</p>
+
+    <form id="ota-form">
+      <div class="grid">
+        <label>
+          Host HiveMQ
+          <input id="host" value="36259d97745649d69b665673ad1883e7.s1.eu.hivemq.cloud" required />
+        </label>
+        <label>
+          Puerto WSS
+          <input id="port" type="number" value="8884" required />
+        </label>
+        <label>
+          Usuario
+          <input id="username" value="usuario_cc2" required />
+        </label>
+        <label>
+          Password
+          <input id="password" type="password" required />
+        </label>
+      </div>
+
+      <label>
+        Topic
+        <input id="topic" value="riego/device/ota/cmd" required />
+      </label>
+
+      <label>
+        Payload
+        <textarea id="payload" spellcheck="false">{
+  "enabled": true,
+  "version": "2026.07.06-ota2",
+  "url": "https://github.com/jmffreige/riego-cc2/releases/download/2026.07.06-ota2/firmware.bin",
+  "sha256": "HASH_SHA256_DEL_BINARIO"
+}</textarea>
+      </label>
+
+      <div class="actions">
+        <button type="submit">Publicar OTA retenida</button>
+        <button class="secondary" id="clear-command" type="button">Desarmar OTA retenida</button>
+      </div>
+    </form>
+
+    <h2>Estado</h2>
+    <pre id="log">Sin conectar.</pre>
+
+    <script>
+      const form = document.querySelector("#ota-form");
+      const log = document.querySelector("#log");
+      const clearButton = document.querySelector("#clear-command");
+
+      function write(message) {
+        log.textContent = `${new Date().toLocaleTimeString()} - ${message}\n${log.textContent}`;
+      }
+
+      function readConfig() {
+        return {
+          host: document.querySelector("#host").value.trim().replace(/^wss?:\/\//, "").replace(/\/.*$/, ""),
+          port: Number(document.querySelector("#port").value),
+          username: document.querySelector("#username").value.trim(),
+          password: document.querySelector("#password").value,
+          topic: document.querySelector("#topic").value.trim(),
+        };
+      }
+
+      function connectAndPublish(payload) {
+        const config = readConfig();
+        const client = mqtt.connect(`wss://${config.host}:${config.port}/mqtt`, {
+          username: config.username,
+          password: config.password,
+          clientId: `riego-ota-${Date.now().toString(36)}`,
+          clean: true,
+          connectTimeout: 10000,
+          reconnectPeriod: 0,
+          protocolVersion: 4,
+        });
+
+        client.on("connect", () => {
+          write("Conectado. Publicando con retain=true y QoS 1...");
+          client.subscribe("riego/device/ota/state", { qos: 1 });
+          client.publish(config.topic, payload, { qos: 1, retain: true }, (error) => {
+            if (error) {
+              write(`Error publicando: ${error.message}`);
+              client.end(true);
+              return;
+            }
+            write(`Publicado en ${config.topic}: ${payload}`);
+          });
+        });
+
+        client.on("message", (topic, message) => {
+          write(`${topic}: ${message.toString()}`);
+        });
+
+        client.on("error", (error) => {
+          write(`Error MQTT: ${error.message}`);
+          client.end(true);
+        });
+
+        setTimeout(() => {
+          write("Cerrando conexion.");
+          client.end(true);
+        }, 15000);
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        try {
+          JSON.parse(document.querySelector("#payload").value);
+        } catch {
+          write("El payload no es JSON valido.");
+          return;
+        }
+        connectAndPublish(document.querySelector("#payload").value);
+      });
+
+      clearButton.addEventListener("click", () => {
+        connectAndPublish('{"enabled": false}');
+      });
+    </script>
+  </body>
+</html>

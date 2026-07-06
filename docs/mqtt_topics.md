@@ -9,6 +9,9 @@
 * `riego/device/ota/cmd`: comando retenido que se publica manualmente al querer actualizar.
 * `riego/device/ota/state`: estado retenido publicado por el ESP32.
 
+Si el cliente web de HiveMQ no ofrece `retain`, usar `tools/ota-publisher.html`
+desde el navegador local para publicar la orden OTA retenida.
+
 Ejemplo:
 
 ```json
