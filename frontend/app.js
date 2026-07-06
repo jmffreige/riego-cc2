@@ -16,6 +16,7 @@ const PROGRAM_STORAGE_KEY = "riego-programacion";
 const DEFAULT_RETRY_SECONDS = 5 * 60;
 const WAKE_CONFIRMATION_GRACE_SECONDS = 75;
 const PROBLEM_RECENT_WINDOW_SECONDS = 10 * 60;
+const ROUTINE_CLOSED_STATUSES = Object.freeze(["idle", "finished", "disabled", "stopped"]);
 const WEEKDAYS = Object.freeze(["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]);
 const WEEKDAY_OPTIONS = Object.freeze([
   { value: 1, short: "L", name: "Lunes" },
@@ -605,7 +606,7 @@ function renderZoneStatus(zoneId) {
   if (routineStatus === "watering") {
     displayState = openZone > 0 && zoneId === openZone ? "watering" : "off";
     label = openZone > 0 && zoneId === openZone ? "Regando" : "Cerrada";
-  } else if (["finished", "disabled", "stopped"].includes(routineStatus)) {
+  } else if (ROUTINE_CLOSED_STATUSES.includes(routineStatus)) {
     displayState = "off";
     label = "Cerrada";
   } else if (routineStatus === "scheduled") {
@@ -640,7 +641,7 @@ function setRoutineState(rawPayload) {
       step: Number(routine.step) || 0,
       stepCount: Number(routine.stepCount) || 0,
     };
-    if (["idle", "finished", "disabled", "stopped"].includes(routineState.status) || routineState.status === "watering") {
+    if (ROUTINE_CLOSED_STATUSES.includes(routineState.status) || routineState.status === "watering") {
       immediateRoutinePending = false;
     }
     renderAllZoneStatuses();
@@ -1093,6 +1094,7 @@ function finishCycle(message = "Ciclo completado") {
   immediateRoutinePending = false;
   routineState.status = "idle";
   routineState.openZone = 0;
+  renderAllZoneStatuses();
   elements.cycleStatus.textContent = message;
   elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
   updateStopButton();
