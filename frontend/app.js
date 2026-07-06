@@ -1,7 +1,7 @@
 const MQTT_DEFAULTS = Object.freeze({
   host: "36259d97745649d69b665673ad1883e7.s1.eu.hivemq.cloud",
   port: 8884,
-  username: "jardinero_cc2",
+  username: "usuario_cc2",
 });
 
 const PROGRAM_TOPIC = "riego/programacion/cmd";
@@ -523,7 +523,9 @@ function removeRoutine(card) {
 function getSessionConfig() {
   try {
     const config = JSON.parse(sessionStorage.getItem("riego-mqtt-config")) ?? {};
-    if (config.username === "jardinero-cc2") config.username = MQTT_DEFAULTS.username;
+    if (config.username === "jardinero-cc2" || config.username === "jardinero_cc2") {
+      config.username = MQTT_DEFAULTS.username;
+    }
     return config;
   } catch {
     return {};
