@@ -43,7 +43,7 @@ Los campos deben contener:
 | --- | --- |
 | Servidor | `36259d97745649d69b665673ad1883e7.s1.eu.hivemq.cloud` |
 | Puerto WSS | `8884` |
-| Usuario | `jardinero_cc2` |
+| Usuario | `usuario_cc2` |
 | Contraseña | La contraseña configurada en HiveMQ |
 
 Pulsa **Conectar panel**. Si todo funciona, la parte superior mostrará **En línea**.
@@ -60,7 +60,7 @@ La web utiliza:
 | Enviar comandos | `riego/zona1/cmd` hasta `riego/zona4/cmd` |
 | Guardar las rutinas | `riego/programacion/cmd` con un objeto JSON retenido |
 | Regar ahora | `riego/routine/config` con un objeto JSON retenido |
-| Detener rutina inmediata | `riego/routine/config` con `{ "enabled": false }` |
+| Detener riego en curso | `riego/routine/config` con `{ "enabled": false }` |
 | Abrir la válvula | `ON` |
 | Cerrar la válvula | `OFF` |
 
@@ -68,14 +68,14 @@ Para probar el sistema completo:
 
 1. Enciende el ESP32 y comprueba en el monitor serie que se conecta al Wi-Fi y a HiveMQ.
 2. Abre la web y conecta el panel.
-3. Entra en **Jardín Frontal** y configura la primera rutina: días, hora y minutos de cada zona.
+3. Entra en **Jardín Frontal** y configura la primera rutina: elige si es manual o programada y define los minutos de cada zona.
 4. Pulsa **Añadir rutina** para crear otros ciclos, por ejemplo uno por la mañana y otro por la tarde.
-5. Pulsa **Guardar todas las rutinas**. La web publica un JSON retenido en `riego/programacion/cmd`.
+5. Pulsa **Guardar todas las rutinas**. La web conserva todas las rutinas en la PWA y publica en `riego/programacion/cmd` solo las programadas.
 6. Pulsa **Regar ahora** dentro de una rutina. La web borra primero los
    comandos retenidos de zona y después publica una rutina inmediata retenida en
    `riego/routine/config`; el ESP32 la ejecuta cuando despierte.
 7. Comprueba que la secuencia continúa hasta la zona 4 sin que haya dos válvulas abiertas a la vez.
-8. Pulsa **Detener** si quieres cancelar una rutina inmediata. La web publica
+8. Pulsa **Detener** si quieres cancelar el riego en curso. La web publica
    `{ "enabled": false }` en `riego/routine/config` y limpia los comandos
    retenidos de zona para que no queden órdenes antiguas compitiendo.
 
@@ -115,11 +115,33 @@ resolver. Si el firmware publica `{"active":false,"resolved":false}` en
 `riego/device/problem`, el panel oculta la tarjeta de incidencia. También ignora
 incidencias resueltas antiguas para no mostrar avisos históricos retenidos.
 
-Las rutinas se comparten entre dispositivos mediante el mensaje retenido de
-`riego/programacion/cmd`. Al conectar, la web lee ese retained y actualiza la
-lista visible; `localStorage` queda solo como caché local mientras no haya
-conexión MQTT. Se pueden nombrar, activar, desactivar y eliminar
-individualmente. El mensaje MQTT tiene esta estructura:
+Las rutinas programadas se comparten entre dispositivos mediante el mensaje
+retenido de `riego/programacion/cmd`. Al conectar, la web lee ese retained y
+actualiza la parte programada de la lista visible; las rutinas manuales se
+mantienen guardadas en `localStorage` de la PWA. Se pueden nombrar, cambiar a
+manual o programada y eliminar individualmente.
+
+En la PWA, una rutina manual guardada tiene `mode: "manual"` y no necesita días
+ni hora:
+
+```json
+{
+  "id": "routine-...",
+  "name": "Prueba parada",
+  "mode": "manual",
+  "enabled": true,
+  "dayMode": "daily",
+  "days": [],
+  "startTime": "",
+  "durations": [1, 0, 1, 0]
+}
+```
+
+Las manuales no se publican como programación horaria. Cuando se pulsa **Regar
+ahora**, la web las convierte al formato de rutina inmediata y las publica en
+`riego/routine/config`.
+
+El mensaje MQTT de programación horaria tiene esta estructura:
 
 ```json
 {
@@ -257,7 +279,7 @@ El service worker puede conservar una versión anterior. Cierra la app y vuelve 
 - Borra retained antiguos en `riego/zona1/cmd` ... `riego/zona4/cmd` si los
   publicaste manualmente durante pruebas. La PWA actual los limpia al iniciar y
   detener una rutina inmediata.
-- La cancelación correcta de una rutina inmediata es publicar
+- La cancelación correcta del riego en curso es publicar
   `{ "enabled": false }` en `riego/routine/config`, no encadenar `OFF` manuales
   por zona.
 

@@ -81,6 +81,7 @@ let activeZoneId = null;
 let cycleRunning = false;
 let deviceStatus = "unknown";
 let routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0 };
+let immediateRoutinePending = false;
 let programBaseline = "";
 const zoneStates = new Map();
 
@@ -88,6 +89,7 @@ function createRoutine(index = 0) {
   return {
     id: `routine-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: `Rutina ${index + 1}`,
+    mode: "scheduled",
     enabled: true,
     dayMode: "daily",
     days: [],
@@ -103,6 +105,7 @@ function normalizeRoutine(rawRoutine, index) {
     name: typeof rawRoutine?.name === "string" && rawRoutine.name.trim()
       ? rawRoutine.name.trim().slice(0, 40)
       : fallback.name,
+    mode: rawRoutine?.mode === "manual" ? "manual" : "scheduled",
     enabled: rawRoutine?.enabled !== false,
     dayMode: rawRoutine?.dayMode === "selected" ? "selected" : "daily",
     days: Array.isArray(rawRoutine?.days)
@@ -143,10 +146,10 @@ function parseProgramPayload(rawPayload) {
   try {
     const program = JSON.parse(payload);
     const routines = Array.isArray(program) ? program : program?.routines;
-    if (Array.isArray(routines) && routines.length > 0) {
+    if (Array.isArray(routines)) {
       return {
         version: Number.isInteger(program?.version) ? program.version : 2,
-        routines: routines.map(normalizeRoutine),
+        routines: routines.map((routine, index) => normalizeRoutine({ ...routine, mode: "scheduled" }, index)),
       };
     }
   } catch {
@@ -157,13 +160,17 @@ function parseProgramPayload(rawPayload) {
 }
 
 function canonicalRoutine(routine) {
+  const mode = routine.mode === "manual" ? "manual" : "scheduled";
   return {
     id: routine.id,
     name: String(routine.name || "").trim(),
+    mode,
     enabled: routine.enabled !== false,
-    dayMode: routine.dayMode === "selected" ? "selected" : "daily",
-    days: [...new Set((routine.days || []).map(Number).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b),
-    startTime: routine.startTime || "",
+    dayMode: mode === "manual" ? "daily" : routine.dayMode === "selected" ? "selected" : "daily",
+    days: mode === "manual"
+      ? []
+      : [...new Set((routine.days || []).map(Number).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b),
+    startTime: mode === "manual" ? "" : routine.startTime || "",
     durations: ZONES.map((_, index) => Number(routine.durations?.[index]) || 0),
   };
 }
@@ -173,6 +180,19 @@ function canonicalProgram(routines) {
     version: 2,
     routines: routines.map(canonicalRoutine),
   });
+}
+
+function scheduledProgram(routines) {
+  return {
+    version: 2,
+    routines: routines
+      .filter((routine) => routine.mode !== "manual")
+      .map((routine) => {
+        const canonical = canonicalRoutine(routine);
+        delete canonical.mode;
+        return canonical;
+      }),
+  };
 }
 
 function currentProgramSignature() {
@@ -195,8 +215,10 @@ function applyRemoteProgram(rawPayload) {
   const program = parseProgramPayload(rawPayload);
   if (!program) return;
 
-  localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(program));
-  renderRoutines(program.routines);
+  const manualRoutines = getSavedRoutines().filter((routine) => routine.mode === "manual");
+  const mergedRoutines = [...program.routines, ...manualRoutines];
+  localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify({ version: 2, routines: mergedRoutines }));
+  renderRoutines(mergedRoutines);
 }
 
 function escapeHtml(value) {
@@ -241,8 +263,9 @@ function durationMarkup(routine) {
 
 function routineMarkup(routine, index) {
   const selectedDays = routine.dayMode === "selected";
+  const manualMode = routine.mode === "manual";
   return `
-    <article class="routine-card" data-routine-id="${routine.id}">
+    <article class="routine-card ${manualMode ? "is-manual" : ""}" data-routine-id="${routine.id}">
       <header class="routine-card__header">
         <span class="routine-index">${index + 1}</span>
         <label class="routine-name">
@@ -260,9 +283,32 @@ function routineMarkup(routine, index) {
       </header>
 
       <div class="routine-card__body">
-        <section class="routine-panel">
+        <section class="routine-panel routine-panel--mode">
           <div class="program-card__heading">
             <span class="step-number">1</span>
+            <div>
+              <h3>Tipo de rutina</h3>
+              <p>Manual para lanzarla a demanda, programada para usar calendario.</p>
+            </div>
+          </div>
+
+          <div class="segmented-control" role="radiogroup" aria-label="Tipo de ${escapeHtml(routine.name)}">
+            <label>
+              <input type="radio" name="routine-mode-${routine.id}" value="manual"
+                ${manualMode ? "checked" : ""} />
+              <span>Manual</span>
+            </label>
+            <label>
+              <input type="radio" name="routine-mode-${routine.id}" value="scheduled"
+                ${manualMode ? "" : "checked"} />
+              <span>Programada</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="routine-panel routine-panel--schedule">
+          <div class="program-card__heading">
+            <span class="step-number">2</span>
             <div>
               <h3>Días de riego</h3>
               <p>Todos los días o solamente los seleccionados.</p>
@@ -288,9 +334,9 @@ function routineMarkup(routine, index) {
           </fieldset>
         </section>
 
-        <section class="routine-panel routine-panel--time">
+        <section class="routine-panel routine-panel--time routine-panel--schedule">
           <div class="program-card__heading">
-            <span class="step-number">2</span>
+            <span class="step-number">3</span>
             <div>
               <h3>Hora de inicio</h3>
               <p>Esta rutina comenzará a la hora indicada.</p>
@@ -304,7 +350,7 @@ function routineMarkup(routine, index) {
 
         <section class="routine-panel routine-panel--durations">
           <div class="program-card__heading">
-            <span class="step-number">3</span>
+            <span class="step-number">4</span>
             <div>
               <h3>Duración por zona</h3>
               <p>Siempre se ejecutan en orden y sin solaparse.</p>
@@ -358,11 +404,15 @@ function renderZones() {
 }
 
 function readRoutine(card) {
+  const mode = card.querySelector('input[name^="routine-mode-"]:checked')?.value === "manual"
+    ? "manual"
+    : "scheduled";
   return {
     id: card.dataset.routineId,
     name: card.querySelector(".routine-name-input").value.trim(),
+    mode,
     enabled: card.querySelector(".routine-enabled-input").checked,
-    dayMode: card.querySelector('input[type="radio"]:checked').value,
+    dayMode: card.querySelector('input[name^="day-mode-"]:checked').value,
     days: [...card.querySelectorAll('.weekday-picker input[type="checkbox"]:checked')].map((input) =>
       Number(input.value),
     ),
@@ -376,6 +426,7 @@ function readAllRoutines() {
 }
 
 function describeDays(routine) {
+  if (routine.mode === "manual") return "Manual";
   if (routine.dayMode === "daily") return "Todos los días";
   if (routine.days.length === 0) return "Sin días";
   return routine.days.map((day) => WEEKDAYS[day].slice(0, 3)).join(", ");
@@ -384,19 +435,22 @@ function describeDays(routine) {
 function updateRoutinePreview(card) {
   const routine = readRoutine(card);
   const total = routine.durations.reduce((sum, duration) => sum + (Number.isFinite(duration) ? duration : 0), 0);
-  card.classList.toggle("is-disabled", !routine.enabled);
+  card.classList.toggle("is-disabled", routine.mode !== "manual" && !routine.enabled);
+  card.classList.toggle("is-manual", routine.mode === "manual");
   card.querySelector(".routine-total strong").textContent = `${total} ${total === 1 ? "minuto" : "minutos"}`;
   card.querySelector(".routine-preview").textContent =
-    `${describeDays(routine)} · ${routine.startTime || "--:--"} · ` +
+    `${describeDays(routine)}${routine.mode === "manual" ? "" : ` · ${routine.startTime || "--:--"}`} · ` +
     routine.durations.map((duration, index) => `Z${index + 1} ${duration || 0} min`).join(" → ");
 }
 
 function updateProgramSummary() {
   const routines = readAllRoutines();
-  const activeCount = routines.filter((routine) => routine.enabled).length;
+  const scheduledCount = routines.filter((routine) => routine.mode !== "manual" && routine.enabled).length;
+  const manualCount = routines.filter((routine) => routine.mode === "manual").length;
   elements.programSummary.textContent =
     `${routines.length} ${routines.length === 1 ? "rutina" : "rutinas"} · ` +
-    `${activeCount} ${activeCount === 1 ? "activa" : "activas"}`;
+    `${scheduledCount} ${scheduledCount === 1 ? "programada" : "programadas"} · ` +
+    `${manualCount} ${manualCount === 1 ? "manual" : "manuales"}`;
   updateSaveButton();
 }
 
@@ -409,11 +463,11 @@ function validateRoutine(card) {
     error.textContent = "Escribe un nombre para la rutina.";
     return null;
   }
-  if (routine.dayMode === "selected" && routine.days.length === 0) {
+  if (routine.mode !== "manual" && routine.dayMode === "selected" && routine.days.length === 0) {
     error.textContent = "Selecciona al menos un día para esta rutina.";
     return null;
   }
-  if (!routine.startTime) {
+  if (routine.mode !== "manual" && !routine.startTime) {
     error.textContent = "Selecciona una hora de inicio.";
     return null;
   }
@@ -494,6 +548,10 @@ function updateRunButtons() {
   });
 }
 
+function updateStopButton() {
+  elements.stopCycle.disabled = !client?.connected || (routineState.status !== "watering" && !immediateRoutinePending);
+}
+
 function setConnectionStatus(status, label) {
   elements.connectionButton.dataset.status = status;
   elements.connectionLabel.textContent = label;
@@ -505,6 +563,7 @@ function setConnectionStatus(status, label) {
   };
   elements.systemSummary.textContent = summaries[status] || summaries.idle;
   updateRunButtons();
+  updateStopButton();
 }
 
 function deviceStatusLabel(status) {
@@ -578,11 +637,15 @@ function setRoutineState(rawPayload) {
       step: Number(routine.step) || 0,
       stepCount: Number(routine.stepCount) || 0,
     };
+    if (["idle", "finished", "disabled", "stopped"].includes(routineState.status) || routineState.status === "watering") {
+      immediateRoutinePending = false;
+    }
     renderAllZoneStatuses();
+    updateStopButton();
 
     const nextWakeSeconds = Number(routine.nextWakeSeconds);
     if (Number.isFinite(nextWakeSeconds) && nextWakeSeconds > 0) {
-      setSleepFallback(nextWakeSeconds, routine.status);
+      setSleepFallback(nextWakeSeconds, routine.status, { force: isRoutineInProgress(routine.status) });
     }
 
     if (routineState.status === "watering") {
@@ -708,6 +771,18 @@ function nextEstimatedRetry(wakeAtMs) {
   return wakeAtMs + elapsedRetries * retryMs;
 }
 
+function isRoutineInProgress(status = routineState.status) {
+  return status === "watering" || status === "scheduled";
+}
+
+function isSleepStateOverdue(state = sleepState) {
+  if (!state) return false;
+  const wakeAtMs = state.wakeAtEpoch === null
+    ? state.receivedAtMs + state.sleepSeconds * 1000
+    : state.wakeAtEpoch * 1000;
+  return Date.now() - wakeAtMs > WAKE_CONFIRMATION_GRACE_SECONDS * 1000;
+}
+
 function renderSleepCountdown() {
   if (!sleepState) {
     elements.sleepCountdown.textContent = "Sin datos";
@@ -753,6 +828,10 @@ function setSleepState(rawPayload) {
   const parsed = parseSleepPayload(rawPayload);
   if (!parsed) return;
 
+  if (isRoutineInProgress() && !parsed.routineActive && isSleepStateOverdue(parsed)) {
+    return;
+  }
+
   sleepState = parsed;
   renderSleepCountdown();
   if (!sleepCountdownTimer) {
@@ -760,8 +839,8 @@ function setSleepState(rawPayload) {
   }
 }
 
-function setSleepFallback(nextWakeSeconds, routineStatus = "idle") {
-  if (sleepState?.wakeAtEpoch !== null) return;
+function setSleepFallback(nextWakeSeconds, routineStatus = "idle", options = {}) {
+  if (!options.force && sleepState?.wakeAtEpoch !== null && !isSleepStateOverdue()) return;
 
   sleepState = {
     sleepSeconds: nextWakeSeconds,
@@ -869,6 +948,12 @@ function disconnectCurrentClient() {
   client = null;
 }
 
+function createMqttClientId() {
+  const randomId = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+  return `riego-web-${randomId}`;
+}
+
 function connectMqtt(config) {
   if (!window.mqtt) {
     elements.formError.textContent = "No se pudo cargar MQTT.js. Comprueba tu conexión a internet.";
@@ -884,7 +969,7 @@ function connectMqtt(config) {
   client = mqtt.connect(`wss://${config.host}:${config.port}/mqtt`, {
     username: config.username,
     password: config.password,
-    clientId: `riego-web-${crypto.randomUUID?.() || Math.random().toString(16).slice(2)}`,
+    clientId: createMqttClientId(),
     clean: true,
     connectTimeout: 10_000,
     reconnectPeriod: 4_000,
@@ -968,9 +1053,12 @@ function finishCycle(message = "Ciclo completado") {
   cycleTimer = null;
   cycleRunning = false;
   activeZoneId = null;
+  immediateRoutinePending = false;
+  routineState.status = "idle";
+  routineState.openZone = 0;
   elements.cycleStatus.textContent = message;
   elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
-  elements.stopCycle.disabled = true;
+  updateStopButton();
   elements.systemSummary.textContent = "Programador conectado";
   updateRunButtons();
 }
@@ -979,11 +1067,14 @@ async function stopCycle(message = "Ciclo detenido") {
   clearTimeout(cycleTimer);
   cycleTimer = null;
   cycleRunning = false;
+  immediateRoutinePending = false;
+  elements.stopCycle.disabled = true;
   try {
     await publish(ROUTINE_CONFIG_TOPIC, JSON.stringify({ enabled: false }), { retain: true });
     await clearZoneCommands();
     finishCycle(message);
   } catch {
+    updateStopButton();
     finishCycle("Detención enviada");
     showToast("No se pudo confirmar el cierre de todas las zonas.");
   }
@@ -1035,7 +1126,9 @@ async function startRoutine(card) {
 
   showRoutineInSequence(routine);
   updateRunButtons();
-  elements.stopCycle.disabled = false;
+  immediateRoutinePending = true;
+  routineState.status = "scheduled";
+  updateStopButton();
   elements.cycleStatus.textContent = `${routine.name} enviada`;
   elements.cycleDetail.textContent = "El controlador la ejecutará en su próximo despertar.";
   elements.systemSummary.textContent = "Rutina pendiente en MQTT";
@@ -1053,7 +1146,9 @@ async function startRoutine(card) {
     await publish(ROUTINE_CONFIG_TOPIC, JSON.stringify(immediateRoutine), { retain: true });
     showToast("Rutina inmediata enviada al controlador.");
   } catch {
-    elements.stopCycle.disabled = true;
+    immediateRoutinePending = false;
+    routineState.status = "idle";
+    updateStopButton();
     showToast("No se pudo enviar la rutina inmediata.");
   }
 }
@@ -1073,7 +1168,11 @@ elements.routinesList.addEventListener("input", (event) => {
 elements.routinesList.addEventListener("change", (event) => {
   const card = event.target.closest(".routine-card");
   if (!card) return;
-  if (event.target.matches('input[type="radio"]')) {
+  if (event.target.matches('input[name^="routine-mode-"]')) {
+    const routine = readRoutine(card);
+    card.classList.toggle("is-manual", routine.mode === "manual");
+  }
+  if (event.target.matches('input[name^="day-mode-"]')) {
     card.querySelector(".weekday-picker").disabled = event.target.value !== "selected";
     card.querySelector(".program-error").textContent = "";
   }
@@ -1096,14 +1195,15 @@ elements.programForm.addEventListener("submit", async (event) => {
   const routines = validateAllRoutines();
   if (!routines) return;
 
-  const program = { version: 2, routines };
-  localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(program));
+  const savedProgram = { version: 2, routines };
+  const mqttProgram = scheduledProgram(routines);
+  localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(savedProgram));
   setProgramBaseline(routines);
   updateProgramSummary();
 
   if (client?.connected) {
     try {
-      await publish(PROGRAM_TOPIC, JSON.stringify(program), { retain: true });
+      await publish(PROGRAM_TOPIC, JSON.stringify(mqttProgram), { retain: true });
       showToast("Todas las rutinas se han guardado y enviado.");
     } catch {
       showToast("Guardadas en este dispositivo; no se pudieron enviar.");
