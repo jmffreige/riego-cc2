@@ -663,13 +663,7 @@ void applyRoutineConfig(const byte* payload, unsigned int length) {
 
   const bool enabled = doc["enabled"] | false;
   if (!enabled) {
-    if (routine.active && routine.programHash != 0) {
-      Serial.println("Rutina inmediata desactivada ignorada: hay una programacion en curso");
-      publishRoutineState(routine.openZoneIndex >= 0 ? "watering" : "scheduled");
-      return;
-    }
-
-    Serial.println("Rutina inmediata desactivada por MQTT");
+    Serial.println("Rutina desactivada por MQTT");
     if (routine.active) {
       closeRoutineOpenZone();
       clearRoutine();

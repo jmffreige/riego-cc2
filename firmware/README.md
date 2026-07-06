@@ -132,16 +132,16 @@ de una rutina inmediata:
 }
 ```
 
-Para cancelar esa rutina inmediata, publicar en `riego/routine/config`:
+Para detener la rutina en curso, publicar en `riego/routine/config`:
 
 ```json
 { "enabled": false }
 ```
 
-Ese topic se usa solo para rutinas inmediatas. Un `{ "enabled": false }`
-retenido en `riego/routine/config` no cancela una rutina programada que venga de
-`riego/programacion/cmd`. Esto evita que un comando manual antiguo detenga una
-programación automática.
+Ese comando cierra la zona abierta y cancela la ejecución actual, sea inmediata
+o programada. No desactiva futuras ejecuciones de una rutina programada; para
+eso hay que publicar de nuevo `riego/programacion/cmd` con la rutina
+desactivada, eliminada o cambiada.
 
 ## Topics MQTT
 
