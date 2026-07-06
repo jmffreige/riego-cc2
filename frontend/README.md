@@ -57,6 +57,7 @@ La web utiliza:
 | Recibir próximo despertar | `riego/device/sleep` |
 | Recibir estado del controlador | `riego/device/status` |
 | Recibir estado de rutina | `riego/routine/state` |
+| Recibir estado OTA | `riego/device/ota/state` |
 | Enviar comandos | `riego/zona1/cmd` hasta `riego/zona4/cmd` |
 | Guardar las rutinas | `riego/programacion/cmd` con un objeto JSON retenido |
 | Regar ahora | `riego/routine/config` con un objeto JSON retenido |

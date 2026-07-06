@@ -1,12 +1,20 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <Update.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <esp_sleep.h>
+#include <mbedtls/sha256.h>
 #include <time.h>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
+
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
 
 #include "secrets.h"
 
@@ -21,6 +29,7 @@ constexpr uint32_t VALVE_RECHARGE_MS = 15000;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t MQTT_TIMEOUT_MS = 15000;
 constexpr uint32_t MQTT_LISTEN_WINDOW_MS = 7000;
+constexpr uint32_t OTA_TIMEOUT_MS = 60000;
 constexpr uint32_t NTP_TIMEOUT_MS = 8000;
 constexpr uint64_t DEFAULT_SLEEP_MINUTES = 5;
 constexpr uint64_t DEFAULT_SLEEP_SECONDS = DEFAULT_SLEEP_MINUTES * 60ULL;
@@ -36,6 +45,7 @@ constexpr float ADC_MAX = 4095.0f;
 constexpr float BATTERY_DIVIDER_FACTOR = 2.09f;
 constexpr float BATTERY_EMPTY_V = 3.20f;
 constexpr float BATTERY_FULL_V = 4.20f;
+constexpr uint8_t OTA_MIN_BATTERY_PERCENT = 60;
 
 struct ValveZone {
   uint8_t openPin;
@@ -80,6 +90,13 @@ struct RetainedCheckProblem {
   char detail[112];
 };
 
+struct OtaCommand {
+  bool pending;
+  char version[40];
+  char url[256];
+  char sha256[65];
+};
+
 const ValveZone zones[ZONE_COUNT] = {
   {16, 4, "riego/zona1/cmd", "riego/zona1/state"},
   {18, 17, "riego/zona2/cmd", "riego/zona2/state"},
@@ -90,12 +107,15 @@ const ValveZone zones[ZONE_COUNT] = {
 const char* ROUTINE_CONFIG_TOPIC = "riego/routine/config";
 const char* PROGRAM_CONFIG_TOPIC = "riego/programacion/cmd";
 const char* ROUTINE_STATE_TOPIC = "riego/routine/state";
+const char* OTA_COMMAND_TOPIC = "riego/device/ota/cmd";
+const char* OTA_STATE_TOPIC = "riego/device/ota/state";
 const char* BATTERY_TOPIC = "riego/device/battery";
 const char* STATUS_TOPIC = "riego/device/status";
 const char* SLEEP_TOPIC = "riego/device/sleep";
 const char* PROBLEM_TOPIC = "riego/device/problem";
 const char* CLIENT_ID = "ESP32_Riegos_CC2";
 const char* TZ_INFO = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+const char* FIRMWARE_VERSION_STRING = FIRMWARE_VERSION;
 
 WiFiClientSecure secureClient;
 PubSubClient mqtt(secureClient);
@@ -114,6 +134,11 @@ RTC_DATA_ATTR uint32_t lastRoutineSleepSeconds = 0;
 uint64_t nextSleepSeconds = DEFAULT_SLEEP_SECONDS;
 bool routineFinishedThisWake = false;
 bool clockReady = false;
+OtaCommand pendingOta = {};
+uint8_t lastBatteryPercent = 0;
+float lastBatteryVoltage = 0.0f;
+
+void flushMqttPublishes(uint32_t durationMs);
 
 void setAllValvePinsLow() {
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
@@ -191,6 +216,64 @@ void publishRoutineState(const char* status) {
            status, static_cast<unsigned long>(routine.id), routine.currentStepIndex + 1, routine.stepCount, openZone,
            static_cast<unsigned long long>(nextSleepSeconds));
   mqtt.publish(ROUTINE_STATE_TOPIC, payload, true);
+}
+
+void publishOtaState(const char* status, const char* reason = "", const char* version = "", int progress = -1) {
+  if (!mqtt.connected()) {
+    return;
+  }
+
+  char payload[256] = {};
+  snprintf(payload, sizeof(payload),
+           "{\"status\":\"%s\",\"version\":\"%s\",\"currentVersion\":\"%s\",\"progress\":%d,\"reason\":\"%s\"}",
+           status, version ? version : "", FIRMWARE_VERSION_STRING, progress, reason ? reason : "");
+  mqtt.publish(OTA_STATE_TOPIC, payload, true);
+  flushMqttPublishes(250);
+  Serial.printf("Estado OTA: %s\n", payload);
+}
+
+bool isHexSha256(const char* value) {
+  if (!value || strlen(value) != 64) {
+    return false;
+  }
+  for (uint8_t i = 0; i < 64; ++i) {
+    if (!isxdigit(static_cast<unsigned char>(value[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isSafeVersionToken(const char* value) {
+  if (!value || value[0] == '\0' || strlen(value) >= sizeof(pendingOta.version)) {
+    return false;
+  }
+  for (uint8_t i = 0; value[i] != '\0'; ++i) {
+    const char c = value[i];
+    const bool safe = isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-';
+    if (!safe) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void normalizeSha256(char* value) {
+  for (uint8_t i = 0; value[i] != '\0'; ++i) {
+    value[i] = static_cast<char>(tolower(static_cast<unsigned char>(value[i])));
+  }
+}
+
+void bytesToHex(const uint8_t* bytes, size_t length, char* output, size_t outputSize) {
+  static const char* hex = "0123456789abcdef";
+  if (outputSize < length * 2 + 1) {
+    return;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    output[i * 2] = hex[(bytes[i] >> 4) & 0x0F];
+    output[i * 2 + 1] = hex[bytes[i] & 0x0F];
+  }
+  output[length * 2] = '\0';
 }
 
 void copyProblemText(char* target, size_t targetSize, const char* value) {
@@ -744,6 +827,214 @@ void applyRoutineConfig(const byte* payload, unsigned int length) {
   startRoutineStep(0);
 }
 
+void applyOtaCommand(const byte* payload, unsigned int length) {
+  if (length == 0) {
+    pendingOta.pending = false;
+    publishOtaState("idle");
+    return;
+  }
+
+  StaticJsonDocument<768> doc;
+  const DeserializationError error = deserializeJson(doc, payload, length);
+  if (error) {
+    publishOtaState("failed", "invalid_json");
+    return;
+  }
+
+  if (!(doc["enabled"] | true)) {
+    pendingOta.pending = false;
+    publishOtaState("idle");
+    return;
+  }
+
+  const char* version = doc["version"] | "";
+  const char* url = doc["url"] | "";
+  const char* sha256 = doc["sha256"] | "";
+  if (version[0] == '\0' || url[0] == '\0' || sha256[0] == '\0') {
+    publishOtaState("failed", "missing_fields");
+    return;
+  }
+  if (!isSafeVersionToken(version)) {
+    publishOtaState("failed", "invalid_version");
+    return;
+  }
+  if (strlen(url) >= sizeof(pendingOta.url)) {
+    publishOtaState("failed", "url_too_long", version);
+    return;
+  }
+  if (strncmp(url, "https://", 8) != 0) {
+    publishOtaState("failed", "invalid_url", version);
+    return;
+  }
+  if (!isHexSha256(sha256)) {
+    publishOtaState("failed", "invalid_sha256", version);
+    return;
+  }
+
+  strncpy(pendingOta.version, version, sizeof(pendingOta.version) - 1);
+  pendingOta.version[sizeof(pendingOta.version) - 1] = '\0';
+  strncpy(pendingOta.url, url, sizeof(pendingOta.url) - 1);
+  pendingOta.url[sizeof(pendingOta.url) - 1] = '\0';
+  strncpy(pendingOta.sha256, sha256, sizeof(pendingOta.sha256) - 1);
+  pendingOta.sha256[sizeof(pendingOta.sha256) - 1] = '\0';
+  normalizeSha256(pendingOta.sha256);
+  pendingOta.pending = true;
+  publishOtaState("queued", "", pendingOta.version);
+}
+
+bool runHttpOta() {
+  WiFiClientSecure otaClient;
+  otaClient.setInsecure();
+
+  HTTPClient http;
+  http.setConnectTimeout(15000);
+  http.setTimeout(10000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(5);
+  http.setUserAgent("riego-cc2-esp32-ota");
+
+  if (!http.begin(otaClient, pendingOta.url)) {
+    publishOtaState("failed", "http_begin", pendingOta.version);
+    return false;
+  }
+
+  publishOtaState("downloading", "", pendingOta.version, 0);
+  const int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    char reason[28] = {};
+    snprintf(reason, sizeof(reason), "http_%d", httpCode);
+    publishOtaState("failed", reason, pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  const int contentLength = http.getSize();
+  if (contentLength <= 0) {
+    publishOtaState("failed", "no_content_length", pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  if (!Update.begin(static_cast<size_t>(contentLength), U_FLASH)) {
+    publishOtaState("failed", "no_ota_space", pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  mbedtls_sha256_context shaContext;
+  mbedtls_sha256_init(&shaContext);
+  mbedtls_sha256_starts_ret(&shaContext, 0);
+
+  WiFiClient* stream = http.getStreamPtr();
+  uint8_t buffer[1024] = {};
+  size_t written = 0;
+  int lastProgress = -1;
+  const uint32_t startMs = millis();
+
+  while (http.connected() && written < static_cast<size_t>(contentLength)) {
+    if (millis() - startMs > OTA_TIMEOUT_MS) {
+      Update.abort();
+      mbedtls_sha256_free(&shaContext);
+      publishOtaState("failed", "timeout", pendingOta.version);
+      http.end();
+      return false;
+    }
+
+    const size_t available = stream->available();
+    if (available == 0) {
+      mqtt.loop();
+      delay(10);
+      continue;
+    }
+
+    const size_t toRead = min(sizeof(buffer), min(available, static_cast<size_t>(contentLength) - written));
+    const size_t readBytes = stream->readBytes(buffer, toRead);
+    if (readBytes == 0) {
+      continue;
+    }
+
+    if (Update.write(buffer, readBytes) != readBytes) {
+      Update.abort();
+      mbedtls_sha256_free(&shaContext);
+      publishOtaState("failed", "flash_write", pendingOta.version);
+      http.end();
+      return false;
+    }
+
+    mbedtls_sha256_update_ret(&shaContext, buffer, readBytes);
+    written += readBytes;
+    const int progress = static_cast<int>((written * 100ULL) / static_cast<size_t>(contentLength));
+    if (progress >= lastProgress + 20 || progress == 100) {
+      lastProgress = progress;
+      publishOtaState("downloading", "", pendingOta.version, progress);
+    }
+  }
+
+  uint8_t digest[32] = {};
+  char calculatedSha[65] = {};
+  mbedtls_sha256_finish_ret(&shaContext, digest);
+  mbedtls_sha256_free(&shaContext);
+  bytesToHex(digest, sizeof(digest), calculatedSha, sizeof(calculatedSha));
+
+  if (written != static_cast<size_t>(contentLength)) {
+    Update.abort();
+    publishOtaState("failed", "incomplete_download", pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  if (strcmp(calculatedSha, pendingOta.sha256) != 0) {
+    Update.abort();
+    publishOtaState("failed", "sha256_mismatch", pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  if (!Update.end()) {
+    Serial.printf("OTA Update.end fallo: %s\n", Update.errorString());
+    publishOtaState("failed", "update_end", pendingOta.version);
+    http.end();
+    return false;
+  }
+
+  http.end();
+  publishOtaState("updated", "", pendingOta.version, 100);
+  mqtt.publish(STATUS_TOPIC, "restarting", true);
+  flushMqttPublishes(1000);
+  delay(250);
+  ESP.restart();
+  return true;
+}
+
+bool processPendingOta() {
+  if (!pendingOta.pending) {
+    return false;
+  }
+
+  if (strcmp(pendingOta.version, FIRMWARE_VERSION_STRING) == 0) {
+    publishOtaState("skipped", "up_to_date", pendingOta.version);
+    pendingOta.pending = false;
+    return false;
+  }
+
+  if (routine.active) {
+    publishOtaState("failed", "routine_active", pendingOta.version);
+    pendingOta.pending = false;
+    return false;
+  }
+
+  if (lastBatteryPercent < OTA_MIN_BATTERY_PERCENT) {
+    publishOtaState("failed", "battery_low", pendingOta.version);
+    pendingOta.pending = false;
+    return false;
+  }
+
+  publishOtaState("checking", "", pendingOta.version);
+  const bool started = runHttpOta();
+  pendingOta.pending = false;
+  return started;
+}
+
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, PROGRAM_CONFIG_TOPIC) == 0) {
     applyProgramConfig(payload, length);
@@ -752,6 +1043,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(topic, ROUTINE_CONFIG_TOPIC) == 0) {
     applyRoutineConfig(payload, length);
+    return;
+  }
+
+  if (strcmp(topic, OTA_COMMAND_TOPIC) == 0) {
+    applyOtaCommand(payload, length);
     return;
   }
 
@@ -832,6 +1128,7 @@ bool connectMqtt() {
   mqtt.publish(STATUS_TOPIC, "online", true);
   mqtt.subscribe(PROGRAM_CONFIG_TOPIC, 1);
   mqtt.subscribe(ROUTINE_CONFIG_TOPIC, 1);
+  mqtt.subscribe(OTA_COMMAND_TOPIC, 1);
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
     mqtt.subscribe(zones[i].commandTopic, 1);
   }
@@ -885,6 +1182,8 @@ uint8_t batteryPercent(float voltage) {
 void publishBattery() {
   const float voltage = readBatteryVoltage();
   const uint8_t percent = batteryPercent(voltage);
+  lastBatteryVoltage = voltage;
+  lastBatteryPercent = percent;
 
   char payload[64] = {};
   snprintf(payload, sizeof(payload), "{\"voltage\":%.2f,\"percent\":%u}", voltage, percent);
@@ -997,6 +1296,7 @@ void setup() {
     } else if (retainedProblemResolutionPublished) {
       publishNoProblemState();
     }
+    processPendingOta();
   }
 
   if (pendingRoutineAdvance) {

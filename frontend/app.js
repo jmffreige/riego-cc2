@@ -11,6 +11,7 @@ const STATUS_TOPIC = "riego/device/status";
 const SLEEP_TOPIC = "riego/device/sleep";
 const PROBLEM_TOPIC = "riego/device/problem";
 const ROUTINE_STATE_TOPIC = "riego/routine/state";
+const OTA_STATE_TOPIC = "riego/device/ota/state";
 const PROGRAM_STORAGE_KEY = "riego-programacion";
 const DEFAULT_RETRY_SECONDS = 5 * 60;
 const WAKE_CONFIRMATION_GRACE_SECONDS = 75;
@@ -674,6 +675,38 @@ function setRoutineState(rawPayload) {
   }
 }
 
+function setOtaState(rawPayload) {
+  try {
+    const state = JSON.parse(rawPayload.trim());
+    if (!state || typeof state !== "object") return;
+    const status = typeof state.status === "string" ? state.status : "";
+    const version = typeof state.version === "string" ? state.version : "";
+    const reason = typeof state.reason === "string" ? state.reason : "";
+    const progress = Number(state.progress);
+
+    if (status === "downloading") {
+      elements.systemSummary.textContent = Number.isFinite(progress) && progress >= 0
+        ? `Actualizando firmware · ${progress}%`
+        : "Actualizando firmware";
+      return;
+    }
+    if (status === "updated") {
+      showToast(`Firmware actualizado${version ? ` · ${version}` : ""}.`);
+      elements.systemSummary.textContent = "Firmware actualizado";
+      return;
+    }
+    if (status === "failed") {
+      showProblem("Actualización no completada", reason ? `Motivo: ${reason}.` : "El controlador no pudo actualizarse.");
+      return;
+    }
+    if (status === "skipped") {
+      showToast(reason === "up_to_date" ? "Firmware ya actualizado." : "Actualización omitida.");
+    }
+  } catch {
+    // El estado OTA debería ser JSON; ignoramos mensajes retenidos antiguos o incompletos.
+  }
+}
+
 function setZoneState(zoneId, rawState) {
   const state = rawState.trim().toUpperCase();
   if (state !== "ON" && state !== "OFF") return;
@@ -992,6 +1025,7 @@ function connectMqtt(config) {
         SLEEP_TOPIC,
         PROBLEM_TOPIC,
         ROUTINE_STATE_TOPIC,
+        OTA_STATE_TOPIC,
         PROGRAM_TOPIC,
       ],
       { qos: 1 },
@@ -1007,6 +1041,7 @@ function connectMqtt(config) {
     if (topic === SLEEP_TOPIC) setSleepState(payload.toString());
     if (topic === PROBLEM_TOPIC) setProblemState(payload.toString());
     if (topic === ROUTINE_STATE_TOPIC) setRoutineState(payload.toString());
+    if (topic === OTA_STATE_TOPIC) setOtaState(payload.toString());
     if (topic === PROGRAM_TOPIC) applyRemoteProgram(payload.toString());
   });
   client.on("reconnect", () => setConnectionStatus("connecting", "Reconectando…"));

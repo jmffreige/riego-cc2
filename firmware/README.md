@@ -164,6 +164,82 @@ La PWA debe publicar comandos con `retain: true`.
 | Estado dispositivo | `riego/device/status` | `online`, `sleeping`, `offline` |
 | Próximo despertar | `riego/device/sleep` | JSON retenido |
 | Incidencia de conexión | `riego/device/problem` | JSON retenido |
+| Orden OTA | `riego/device/ota/cmd` | JSON retenido |
+| Estado OTA | `riego/device/ota/state` | JSON retenido |
+
+## Actualización OTA HTTP
+
+El firmware acepta una actualización manual por HTTPS cuando recibe un comando
+retenido en `riego/device/ota/cmd`. El usuario normal de la PWA no debe poder
+publicar en este topic; debe quedar reservado a un usuario admin en HiveMQ. El
+ESP32 solo necesita permiso de lectura sobre `riego/device/ota/cmd` y permiso de
+publicación sobre `riego/device/ota/state`.
+
+Ejemplo de comando:
+
+```json
+{
+  "enabled": true,
+  "version": "firmware-v2026.07.06-2",
+  "url": "https://github.com/jmffreige/riego-cc2/releases/download/firmware-v2026.07.06-2/firmware.bin",
+  "sha256": "..."
+}
+```
+
+Condiciones antes de instalar:
+
+- batería mínima del 60 %;
+- ninguna rutina activa;
+- URL `https://`;
+- `sha256` válido y coincidente con el binario descargado;
+- versión distinta de la compilada en `FIRMWARE_VERSION`.
+
+El ESP32 sigue redirecciones HTTPS de GitHub, aborta si la descarga supera unos
+60 segundos y publica progreso o errores en `riego/device/ota/state`.
+
+Estados publicados:
+
+```json
+{"status":"queued","version":"firmware-v2026.07.06-2","currentVersion":"2026.07.06-ota1","progress":-1,"reason":""}
+```
+
+```json
+{"status":"downloading","version":"firmware-v2026.07.06-2","currentVersion":"2026.07.06-ota1","progress":40,"reason":""}
+```
+
+```json
+{"status":"updated","version":"firmware-v2026.07.06-2","currentVersion":"2026.07.06-ota1","progress":100,"reason":""}
+```
+
+```json
+{"status":"failed","version":"firmware-v2026.07.06-2","currentVersion":"2026.07.06-ota1","progress":-1,"reason":"battery_low"}
+```
+
+Para desarmar una orden retenida sin instalar nada:
+
+```json
+{"enabled": false}
+```
+
+Para preparar un release en GitHub:
+
+1. Cambiar `FIRMWARE_VERSION` en `platformio.ini`.
+2. Compilar:
+
+   ```powershell
+   pio run -e esp32dev
+   ```
+
+3. Calcular el hash:
+
+   ```powershell
+   Get-FileHash .pio\build\esp32dev\firmware.bin -Algorithm SHA256
+   ```
+
+4. Crear un release en `https://github.com/jmffreige/riego-cc2/releases` con un
+   tag igual a la versión, por ejemplo `firmware-v2026.07.06-2`.
+5. Adjuntar como asset el archivo `.pio\build\esp32dev\firmware.bin`.
+6. Publicar en `riego/device/ota/cmd` el JSON con esa URL y SHA-256.
 
 Ejemplo de telemetría de batería:
 
