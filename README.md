@@ -36,7 +36,7 @@ final instalada.
 
 ![Soldaduras de la placa perforada](hardware/imagenes/soldadura_1.jpg)
 
-![Detalle adicional de soldadura](hardware/imagenes/soldadura_2.heic)
+![Detalle adicional de soldadura](hardware/imagenes/soldadura_2.jpg)
 
 ### Conexiones
 
@@ -46,11 +46,11 @@ final instalada.
 
 ### Proyecto final
 
-![Caja final del controlador](hardware/imagenes/montaje_final_caja.heic)
+![Caja final del controlador](hardware/imagenes/montaje_final_caja.jpg)
 
-![Panel solar instalado](hardware/imagenes/montaje_final_panel.heic)
+![Panel solar instalado](hardware/imagenes/montaje_final_panel.jpg)
 
-![Arqueta de riego](hardware/imagenes/montaje_final_arqueta.heic)
+![Arqueta de riego](hardware/imagenes/montaje_final_arqueta.jpg)
 
 ## Arquitectura
 
