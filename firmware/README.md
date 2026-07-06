@@ -275,6 +275,11 @@ Ejemplo de orden retenida:
 }
 ```
 
+## Telemetría retenida
+
+El firmware publica varios topics retenidos para que la PWA pueda reconstruir
+el estado aunque el ESP32 vuelva a deep sleep.
+
 Ejemplo de telemetría de batería:
 
 ```json
