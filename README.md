@@ -138,6 +138,28 @@ Para usarlo desde móvil, despliega la carpeta `frontend` en un hosting HTTPS
 como Netlify y abre la URL desde Safari/Chrome. La app se puede instalar como
 PWA.
 
+### Capturas del frontend
+
+#### Inicio
+
+![Pantalla inicial de Control-CC2](frontend/imagenes/pantalla_inicio.png)
+
+#### Panel Jardín Frontal
+
+![Panel Jardín Frontal conectado](frontend/imagenes/jardin_frontal.png)
+
+#### Rutina manual
+
+![Rutina manual de riego](frontend/imagenes/rutina_manual.png)
+
+#### Rutina programada
+
+![Rutina programada de riego](frontend/imagenes/rutinas_programada.png)
+
+#### Telemetría
+
+![Telemetría del controlador](frontend/imagenes/telemetria_jardin_frontal.png)
+
 ## Seguridad y operación
 
 - No unir salidas de válvulas entre sí: cada electroválvula usa su pareja de
