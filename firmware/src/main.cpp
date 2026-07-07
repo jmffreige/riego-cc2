@@ -5,6 +5,7 @@
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
 #include <mbedtls/sha256.h>
 #include <time.h>
@@ -25,7 +26,8 @@ constexpr uint8_t MAX_ROUTINE_STEPS = 8;
 constexpr uint8_t MAX_PROGRAM_ROUTINES = 8;
 constexpr uint8_t BATTERY_PIN = 34;
 constexpr uint16_t VALVE_PULSE_MS = 50;
-constexpr uint32_t VALVE_RECHARGE_MS = 15000;
+constexpr uint32_t SAFE_BOOT_CLOSE_RECHARGE_MS = 2000;
+constexpr uint32_t VALVE_RECHARGE_MS = 5000;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t MQTT_TIMEOUT_MS = 15000;
 constexpr uint32_t MQTT_LISTEN_WINDOW_MS = 7000;
@@ -130,6 +132,7 @@ RTC_DATA_ATTR int32_t lastStartedDayKey = -1;
 RTC_DATA_ATTR RetainedCheckProblem retainedCheckProblem = {};
 RTC_DATA_ATTR bool retainedProblemResolutionPublished = false;
 RTC_DATA_ATTR uint32_t lastRoutineSleepSeconds = 0;
+RTC_DATA_ATTR char lastRoutineStatus[16] = "idle";
 
 uint64_t nextSleepSeconds = DEFAULT_SLEEP_SECONDS;
 bool routineFinishedThisWake = false;
@@ -139,6 +142,20 @@ uint8_t lastBatteryPercent = 0;
 float lastBatteryVoltage = 0.0f;
 
 void flushMqttPublishes(uint32_t durationMs);
+void waitForValveRecharge(const char* reason);
+void clearRoutine(bool resetSummary = true);
+
+gpio_num_t valveGpio(uint8_t pin) {
+  return static_cast<gpio_num_t>(pin);
+}
+
+void disableValvePinHolds() {
+  gpio_deep_sleep_hold_dis();
+  for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    gpio_hold_dis(valveGpio(zones[i].openPin));
+    gpio_hold_dis(valveGpio(zones[i].closePin));
+  }
+}
 
 void setAllValvePinsLow() {
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
@@ -147,12 +164,30 @@ void setAllValvePinsLow() {
   }
 }
 
-void configureValvePins() {
+void enableValvePinHoldsForSleep() {
+  setAllValvePinsLow();
   for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    gpio_hold_en(valveGpio(zones[i].openPin));
+    gpio_hold_en(valveGpio(zones[i].closePin));
+  }
+  gpio_deep_sleep_hold_en();
+}
+
+void configureValvePins() {
+  disableValvePinHolds();
+  for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    gpio_pullup_dis(valveGpio(zones[i].openPin));
+    gpio_pullup_dis(valveGpio(zones[i].closePin));
+    gpio_pulldown_en(valveGpio(zones[i].openPin));
+    gpio_pulldown_en(valveGpio(zones[i].closePin));
     pinMode(zones[i].openPin, OUTPUT);
     pinMode(zones[i].closePin, OUTPUT);
   }
   setAllValvePinsLow();
+}
+
+bool isTimerWakeFromDeepSleep() {
+  return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
 }
 
 void pulseValve(uint8_t zoneIndex, bool openValve) {
@@ -163,6 +198,7 @@ void pulseValve(uint8_t zoneIndex, bool openValve) {
   const ValveZone& zone = zones[zoneIndex];
   Serial.printf("Zona %u: pulso de %s\n", zoneIndex + 1, openValve ? "apertura" : "cierre");
 
+  disableValvePinHolds();
   setAllValvePinsLow();
   digitalWrite(zone.openPin, openValve ? HIGH : LOW);
   digitalWrite(zone.closePin, openValve ? LOW : HIGH);
@@ -170,6 +206,29 @@ void pulseValve(uint8_t zoneIndex, bool openValve) {
   setAllValvePinsLow();
 
   lastAppliedState[zoneIndex] = openValve ? 1 : 0;
+}
+
+void closeAllValvesPhysical(const char* reason, uint32_t rechargeMs = VALVE_RECHARGE_MS) {
+  Serial.println(reason);
+  for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    pulseValve(i, false);
+    if (i + 1 < ZONE_COUNT) {
+      Serial.printf("Esperando %lu ms antes de cerrar la siguiente zona\n", static_cast<unsigned long>(rechargeMs));
+      delay(rechargeMs);
+    }
+  }
+}
+
+void closeAllValvesForSafeBoot() {
+  closeAllValvesPhysical("Arranque no temporizado: cierre fisico rapido de seguridad de todas las zonas",
+                         SAFE_BOOT_CLOSE_RECHARGE_MS);
+
+  clearRoutine();
+  completedRoutineId = 0;
+  routineFinishedThisWake = false;
+  for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    lastAppliedState[i] = 0;
+  }
 }
 
 bool payloadToDesiredState(const byte* payload, unsigned int length, bool& desiredOpen) {
@@ -201,10 +260,19 @@ bool payloadToDesiredState(const byte* payload, unsigned int length, bool& desir
 }
 
 void publishZoneState(uint8_t zoneIndex, bool isOpen) {
+  if (zoneIndex >= ZONE_COUNT) {
+    return;
+  }
+  lastAppliedState[zoneIndex] = isOpen ? 1 : 0;
+  if (!mqtt.connected()) {
+    return;
+  }
   mqtt.publish(zones[zoneIndex].stateTopic, isOpen ? "ON" : "OFF", true);
 }
 
 void publishRoutineState(const char* status) {
+  strncpy(lastRoutineStatus, status ? status : "idle", sizeof(lastRoutineStatus) - 1);
+  lastRoutineStatus[sizeof(lastRoutineStatus) - 1] = '\0';
   if (!mqtt.connected()) {
     return;
   }
@@ -216,6 +284,18 @@ void publishRoutineState(const char* status) {
            status, static_cast<unsigned long>(routine.id), routine.currentStepIndex + 1, routine.stepCount, openZone,
            static_cast<unsigned long long>(nextSleepSeconds));
   mqtt.publish(ROUTINE_STATE_TOPIC, payload, true);
+}
+
+void publishKnownZoneStates() {
+  if (!mqtt.connected()) {
+    return;
+  }
+
+  for (uint8_t i = 0; i < ZONE_COUNT; ++i) {
+    if (lastAppliedState[i] >= 0) {
+      mqtt.publish(zones[i].stateTopic, lastAppliedState[i] == 1 ? "ON" : "OFF", true);
+    }
+  }
 }
 
 void publishOtaState(const char* status, const char* reason = "", const char* version = "", int progress = -1) {
@@ -388,11 +468,13 @@ void waitForValveRecharge(const char* reason) {
   delay(VALVE_RECHARGE_MS);
 }
 
-void clearRoutine(bool resetSummary = true) {
+void clearRoutine(bool resetSummary) {
   routine.active = false;
   routine.openZoneIndex = -1;
   routine.currentStepRemainingSeconds = 0;
   lastRoutineSleepSeconds = 0;
+  strncpy(lastRoutineStatus, "idle", sizeof(lastRoutineStatus) - 1);
+  lastRoutineStatus[sizeof(lastRoutineStatus) - 1] = '\0';
   if (resetSummary) {
     routine.stepCount = 0;
     routine.currentStepIndex = 0;
@@ -438,7 +520,7 @@ void advanceRoutineAfterCheck(bool resumeCurrentStep = false) {
     return;
   }
 
-  Serial.println("Rutina activa: programando siguiente zona tras comprobar MQTT");
+  Serial.println("Rutina activa: programando siguiente zona segun temporizador local");
 
   const uint8_t nextStepIndex = resumeCurrentStep ? routine.currentStepIndex : routine.currentStepIndex + 1;
   if (nextStepIndex >= routine.stepCount) {
@@ -1066,7 +1148,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
 
       const int8_t desiredState = desiredOpen ? 1 : 0;
-      if (lastAppliedState[i] != desiredState) {
+      if (!desiredOpen) {
+        pulseValve(i, false);
+      } else if (lastAppliedState[i] != desiredState) {
         pulseValve(i, desiredOpen);
       } else {
         Serial.printf("Zona %u ya estaba en estado %s; no se repite pulso\n", i + 1, desiredOpen ? "ON" : "OFF");
@@ -1208,6 +1292,7 @@ void flushMqttPublishes(uint32_t durationMs = 500) {
 }
 
 void goToSleep(uint64_t sleepSeconds) {
+  disableValvePinHolds();
   setAllValvePinsLow();
 
   if (sleepSeconds == 0) {
@@ -1228,6 +1313,7 @@ void goToSleep(uint64_t sleepSeconds) {
 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+  enableValvePinHoldsForSleep();
 
   Serial.printf("Deep sleep durante %llu segundos\n", static_cast<unsigned long long>(sleepSeconds));
   Serial.flush();
@@ -1244,11 +1330,16 @@ void setup() {
   Serial.println("Riegos CC2 - ciclo de despertar");
 
   configureValvePins();
+  const bool timerWake = isTimerWakeFromDeepSleep();
+  const bool safeBootClosedValves = !timerWake;
+  if (!timerWake) {
+    closeAllValvesForSafeBoot();
+  }
 
   bool pendingRoutineAdvance = false;
   bool resumeRoutineStep = false;
   bool routinePollWake = false;
-  if (routine.active) {
+  if (timerWake && routine.active) {
     if (routine.openZoneIndex >= 0) {
       if (routine.currentStepRemainingSeconds == 0 && routine.currentStepIndex < routine.stepCount) {
         routine.currentStepRemainingSeconds =
@@ -1287,9 +1378,8 @@ void setup() {
 
   if (mqttReady) {
     publishBattery();
-    publishRoutineState((routine.active && routine.openZoneIndex >= 0)
-                          ? "watering"
-                          : (routineFinishedThisWake ? "finished" : "idle"));
+    publishKnownZoneStates();
+    publishRoutineState(lastRoutineStatus[0] == '\0' ? "idle" : lastRoutineStatus);
     waitForRetainedCommands();
     if (retainedCheckProblem.pending) {
       publishRetainedCheckProblem(true);
@@ -1300,10 +1390,8 @@ void setup() {
   }
 
   if (pendingRoutineAdvance) {
-    if (routine.active && mqttReady) {
+    if (routine.active) {
       advanceRoutineAfterCheck(resumeRoutineStep);
-    } else if (routine.active) {
-      nextSleepSeconds = ROUTINE_POLL_SECONDS;
     } else {
       nextSleepSeconds = DEFAULT_SLEEP_SECONDS;
     }
