@@ -36,8 +36,6 @@ final instalada.
 
 ![Soldaduras de la placa perforada](hardware/imagenes/soldadura_1.jpg)
 
-![Detalle adicional de soldadura](hardware/imagenes/soldadura_2.jpg)
-
 ### Conexiones
 
 ![Circuito de prueba y conexiones](hardware/imagenes/circuito_prueba_1.jpg)
