@@ -296,7 +296,7 @@ El service worker puede conservar una versión anterior. Cierra la app y vuelve 
 ### Regar ahora se comporta raro al detener
 
 - Asegúrate de estar usando la versión actual de la PWA (`CACHE_NAME`
-  `control-cc2-v26` o superior).
+  `control-cc2-v27` o superior).
 - Borra retained antiguos en `riego/zona1/cmd` ... `riego/zona4/cmd` si los
   publicaste manualmente durante pruebas. La PWA actual los limpia al iniciar y
   detener una rutina inmediata.

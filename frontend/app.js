@@ -906,6 +906,18 @@ function renderSleepCountdown() {
   }
 }
 
+function clearRoutineStateFromSleep(state) {
+  if (state.routineActive || state.reason !== "poll" || routineState.status !== "watering") return;
+
+  immediateRoutinePending = false;
+  routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0 };
+  renderAllZoneStatuses();
+  updateStopButton();
+  updateRunButtons();
+  elements.cycleStatus.textContent = "Ciclo detenido";
+  elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
+}
+
 function setSleepState(rawPayload) {
   const parsed = parseSleepPayload(rawPayload);
   if (!parsed) return;
@@ -915,6 +927,7 @@ function setSleepState(rawPayload) {
   }
 
   sleepState = parsed;
+  clearRoutineStateFromSleep(parsed);
   renderSleepCountdown();
   if (!sleepCountdownTimer) {
     sleepCountdownTimer = setInterval(renderSleepCountdown, 1000);
