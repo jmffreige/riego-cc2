@@ -270,6 +270,44 @@ void publishZoneState(uint8_t zoneIndex, bool isOpen) {
   mqtt.publish(zones[zoneIndex].stateTopic, isOpen ? "ON" : "OFF", true);
 }
 
+uint32_t routineStepDurationSeconds() {
+  if (!routine.active || routine.currentStepIndex >= routine.stepCount) {
+    return 0;
+  }
+  return static_cast<uint32_t>(routine.steps[routine.currentStepIndex].durationMinutes) * 60UL;
+}
+
+uint32_t routineRemainingSeconds() {
+  if (!routine.active) {
+    return 0;
+  }
+
+  uint32_t remaining = routine.currentStepRemainingSeconds;
+  const uint8_t firstFutureStep = routine.openZoneIndex >= 0 ? routine.currentStepIndex + 1 : routine.currentStepIndex;
+  for (uint8_t i = firstFutureStep; i < routine.stepCount; ++i) {
+    remaining += static_cast<uint32_t>(routine.steps[i].durationMinutes) * 60UL;
+  }
+  return remaining;
+}
+
+uint32_t routineDurationSeconds() {
+  uint32_t duration = 0;
+  for (uint8_t i = 0; i < routine.stepCount; ++i) {
+    duration += static_cast<uint32_t>(routine.steps[i].durationMinutes) * 60UL;
+  }
+  return duration;
+}
+
+void routineZoneDurationsJson(char* output, size_t outputSize) {
+  uint16_t durations[ZONE_COUNT] = {};
+  for (uint8_t i = 0; i < routine.stepCount; ++i) {
+    if (routine.steps[i].zoneIndex < ZONE_COUNT) {
+      durations[routine.steps[i].zoneIndex] = routine.steps[i].durationMinutes;
+    }
+  }
+  snprintf(output, outputSize, "[%u,%u,%u,%u]", durations[0], durations[1], durations[2], durations[3]);
+}
+
 void publishRoutineState(const char* status) {
   strncpy(lastRoutineStatus, status ? status : "idle", sizeof(lastRoutineStatus) - 1);
   lastRoutineStatus[sizeof(lastRoutineStatus) - 1] = '\0';
@@ -277,12 +315,22 @@ void publishRoutineState(const char* status) {
     return;
   }
 
-  char payload[160] = {};
+  char payload[384] = {};
+  char zoneDurations[32] = {};
   const int8_t openZone = routine.openZoneIndex >= 0 ? routine.openZoneIndex + 1 : 0;
+  const uint32_t stepDuration = routineStepDurationSeconds();
+  const uint32_t stepRemaining = routine.active && routine.openZoneIndex >= 0 ? routine.currentStepRemainingSeconds : 0;
+  const uint32_t totalDuration = routineDurationSeconds();
+  const uint32_t totalRemaining = routineRemainingSeconds();
+  routineZoneDurationsJson(zoneDurations, sizeof(zoneDurations));
   snprintf(payload, sizeof(payload),
-           "{\"status\":\"%s\",\"id\":%lu,\"step\":%u,\"stepCount\":%u,\"openZone\":%d,\"nextWakeSeconds\":%llu}",
+           "{\"status\":\"%s\",\"id\":%lu,\"step\":%u,\"stepCount\":%u,\"openZone\":%d,\"nextWakeSeconds\":%llu,"
+           "\"stepRemainingSeconds\":%lu,\"stepDurationSeconds\":%lu,"
+           "\"routineRemainingSeconds\":%lu,\"routineDurationSeconds\":%lu,\"zoneDurationsMinutes\":%s}",
            status, static_cast<unsigned long>(routine.id), routine.currentStepIndex + 1, routine.stepCount, openZone,
-           static_cast<unsigned long long>(nextSleepSeconds));
+           static_cast<unsigned long long>(nextSleepSeconds), static_cast<unsigned long>(stepRemaining),
+           static_cast<unsigned long>(stepDuration), static_cast<unsigned long>(totalRemaining),
+           static_cast<unsigned long>(totalDuration), zoneDurations);
   mqtt.publish(ROUTINE_STATE_TOPIC, payload, true);
 }
 
@@ -819,6 +867,11 @@ void applyProgramConfig(const byte* payload, unsigned int length) {
 }
 
 void applyRoutineConfig(const byte* payload, unsigned int length) {
+  if (length == 0) {
+    Serial.println("Comando de rutina borrado desde MQTT");
+    return;
+  }
+
   StaticJsonDocument<768> doc;
   const DeserializationError error = deserializeJson(doc, payload, length);
   if (error) {
@@ -839,6 +892,7 @@ void applyRoutineConfig(const byte* payload, unsigned int length) {
     }
     completedRoutineId = 0;
     routineFinishedThisWake = false;
+    mqtt.publish(ROUTINE_CONFIG_TOPIC, "", true);
     return;
   }
 

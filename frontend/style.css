@@ -954,6 +954,12 @@ svg {
   font-size: 0.72rem;
 }
 
+.cycle-controls .cycle-timing {
+  color: var(--aqua);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .cycle-controls__actions {
   display: flex;
   gap: 9px;

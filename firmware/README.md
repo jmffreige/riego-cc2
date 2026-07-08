@@ -139,9 +139,11 @@ Para detener la rutina en curso, publicar en `riego/routine/config`:
 ```
 
 Ese comando cierra la zona abierta y cancela la ejecución actual, sea inmediata
-o programada. No desactiva futuras ejecuciones de una rutina programada; para
-eso hay que publicar de nuevo `riego/programacion/cmd` con la rutina
-desactivada, eliminada o cambiada.
+o programada. Al consumir un `enabled: false`, el firmware borra el mensaje
+retenido de `riego/routine/config` para que un "Detener" antiguo no se vuelva a
+aplicar en despertares posteriores. No desactiva futuras ejecuciones de una
+rutina programada; para eso hay que publicar de nuevo `riego/programacion/cmd`
+con la rutina desactivada, eliminada o cambiada.
 
 ## Topics MQTT
 
@@ -336,7 +338,7 @@ sueño y muestra un reintento estimado usando el ciclo normal de 5 minutos.
 Ejemplo de estado de rutina:
 
 ```json
-{"status":"watering","id":101,"step":1,"stepCount":2,"openZone":1,"nextWakeSeconds":300}
+{"status":"watering","id":101,"step":1,"stepCount":2,"openZone":1,"nextWakeSeconds":60,"stepRemainingSeconds":240,"stepDurationSeconds":300,"routineRemainingSeconds":960,"routineDurationSeconds":1020,"zoneDurationsMinutes":[5,12,0,0]}
 ```
 
 Estados posibles:
@@ -350,6 +352,11 @@ Estados posibles:
 - `disabled`: la rutina fue cancelada desde MQTT.
 - `stopped`: la rutina en curso se detuvo porque la programación retenida fue
   cambiada, desactivada o borrada.
+- `stepRemainingSeconds` y `stepDurationSeconds`: segundos restantes y duración
+  total de la zona actual.
+- `routineRemainingSeconds` y `routineDurationSeconds`: segundos restantes y
+  duración total de la rutina completa.
+- `zoneDurationsMinutes`: duración por zona, incluyendo `0` para zonas omitidas.
 
 ## Ciclo de deep sleep
 

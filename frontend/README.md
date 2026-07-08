@@ -102,7 +102,7 @@ Topics esperados cuando todo va bien:
 | `riego/device/status` | `sleeping` |
 | `riego/device/battery` | `{"voltage":3.91,"percent":71}` |
 | `riego/device/sleep` | `{"sleepSeconds":300,"wakeAtEpoch":1782896700,"reason":"poll","routineActive":false}` |
-| `riego/routine/state` | `{"status":"idle","id":0,"step":1,"stepCount":0,"openZone":0,"nextWakeSeconds":300}` |
+| `riego/routine/state` | `{"status":"watering","id":101,"step":1,"stepCount":2,"openZone":1,"nextWakeSeconds":60,"stepRemainingSeconds":240,"stepDurationSeconds":300,"routineRemainingSeconds":960,"routineDurationSeconds":1020,"zoneDurationsMinutes":[5,12,0,0]}` |
 
 Si `riego/device/status` cambia entre `online` y `sleeping`, el ESP32 está enviando mensajes. Si solo ves comandos en `riego/zona*/cmd` pero no ves `riego/device/*`, el ESP32 no está llegando a publicar telemetría o el usuario MQTT no tiene permiso para suscribirse a esos topics.
 

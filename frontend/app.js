@@ -63,6 +63,7 @@ const elements = {
   stopCycle: document.querySelector("#stop-cycle"),
   cycleStatus: document.querySelector("#cycle-status"),
   cycleDetail: document.querySelector("#cycle-detail"),
+  cycleTiming: document.querySelector("#cycle-timing"),
   dialog: document.querySelector("#settings-dialog"),
   closeSettings: document.querySelector("#close-settings"),
   settingsForm: document.querySelector("#settings-form"),
@@ -79,9 +80,10 @@ const elements = {
 let client = null;
 let toastTimer = null;
 let sleepCountdownTimer = null;
+let routineTimingTimer = null;
 let sleepState = null;
 let deviceStatus = "unknown";
-let routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0 };
+let routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0, receivedAtMs: Date.now() };
 let problemState = { seen: false, active: false, resolvedAtEpoch: null };
 let immediateRoutinePending = false;
 let programBaseline = "";
@@ -414,7 +416,7 @@ function renderZones() {
         <span class="sequence-zone__line" aria-hidden="true"></span>
         <div class="sequence-zone__content">
           <span>
-            <small>Paso ${zone.id} de 4</small>
+            <small id="zone-step-${zone.id}">Paso ${zone.id} de 4</small>
             <strong>${zone.name}</strong>
           </span>
           <span class="sequence-zone__duration" id="zone-duration-${zone.id}">—</span>
@@ -654,6 +656,96 @@ function renderAllZoneStatuses() {
   ZONES.forEach((zone) => renderZoneStatus(zone.id));
 }
 
+function normalizeZoneDurations(rawDurations) {
+  if (!Array.isArray(rawDurations)) return null;
+  return ZONES.map((_, index) => {
+    const value = Number(rawDurations[index]);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  });
+}
+
+function renderSequenceDurations(durations, stepCount = null) {
+  if (!Array.isArray(durations)) return;
+
+  let stepNumber = 0;
+  const totalSteps = Number.isFinite(stepCount) && stepCount > 0
+    ? stepCount
+    : durations.filter((duration) => duration > 0).length;
+
+  durations.forEach((duration, index) => {
+    const zoneId = index + 1;
+    const durationElement = document.querySelector(`#zone-duration-${zoneId}`);
+    const stepElement = document.querySelector(`#zone-step-${zoneId}`);
+    if (durationElement) {
+      durationElement.textContent = duration > 0 ? `${duration} min` : "Omitida";
+    }
+    if (!stepElement) return;
+    if (duration > 0) {
+      stepNumber += 1;
+      stepElement.textContent = `Paso ${stepNumber} de ${totalSteps || stepNumber}`;
+    } else {
+      stepElement.textContent = "Omitida";
+    }
+  });
+}
+
+function positiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function currentRemainingSeconds(initialSeconds, receivedAtMs) {
+  if (!initialSeconds) return 0;
+  const elapsedSeconds = Math.floor((Date.now() - receivedAtMs) / 1000);
+  return Math.max(0, initialSeconds - elapsedSeconds);
+}
+
+function stopRoutineTiming() {
+  if (routineTimingTimer) {
+    clearInterval(routineTimingTimer);
+    routineTimingTimer = null;
+  }
+  elements.cycleTiming.textContent = "";
+}
+
+function renderRoutineTiming() {
+  if (routineState.status !== "watering" || routineState.openZone <= 0) {
+    stopRoutineTiming();
+    return;
+  }
+
+  const stepDuration = positiveNumber(routineState.stepDurationSeconds);
+  const routineDuration = positiveNumber(routineState.routineDurationSeconds);
+  const stepRemaining = currentRemainingSeconds(positiveNumber(routineState.stepRemainingSeconds), routineState.receivedAtMs);
+  const routineRemaining = currentRemainingSeconds(
+    positiveNumber(routineState.routineRemainingSeconds),
+    routineState.receivedAtMs,
+  );
+
+  if (!stepDuration && !routineDuration) {
+    elements.cycleTiming.textContent = "";
+    return;
+  }
+
+  const parts = [];
+  if (stepDuration) {
+    const stepElapsed = Math.min(stepDuration, Math.max(0, stepDuration - stepRemaining));
+    parts.push(`Zona ${routineState.openZone}: ${formatCountdown(stepElapsed)} regando · quedan ${formatCountdown(stepRemaining)}`);
+  }
+  if (routineDuration) {
+    const routineElapsed = Math.min(routineDuration, Math.max(0, routineDuration - routineRemaining));
+    parts.push(`Rutina: ${formatCountdown(routineElapsed)} transcurridos · quedan ${formatCountdown(routineRemaining)}`);
+  }
+  elements.cycleTiming.textContent = parts.join(" · ");
+}
+
+function startRoutineTiming() {
+  renderRoutineTiming();
+  if (!routineTimingTimer) {
+    routineTimingTimer = setInterval(renderRoutineTiming, 1000);
+  }
+}
+
 function setRoutineState(rawPayload) {
   try {
     const routine = JSON.parse(rawPayload.trim());
@@ -663,6 +755,12 @@ function setRoutineState(rawPayload) {
       openZone: Number(routine.openZone) || 0,
       step: Number(routine.step) || 0,
       stepCount: Number(routine.stepCount) || 0,
+      stepRemainingSeconds: positiveNumber(routine.stepRemainingSeconds),
+      stepDurationSeconds: positiveNumber(routine.stepDurationSeconds),
+      routineRemainingSeconds: positiveNumber(routine.routineRemainingSeconds),
+      routineDurationSeconds: positiveNumber(routine.routineDurationSeconds),
+      zoneDurationsMinutes: normalizeZoneDurations(routine.zoneDurationsMinutes),
+      receivedAtMs: Date.now(),
     };
     if (ROUTINE_CLOSED_STATUSES.includes(routineState.status) || routineState.status === "watering") {
       immediateRoutinePending = false;
@@ -677,15 +775,21 @@ function setRoutineState(rawPayload) {
     }
 
     if (routineState.status === "watering") {
+      if (routineState.zoneDurationsMinutes) {
+        renderSequenceDurations(routineState.zoneDurationsMinutes, routineState.stepCount);
+      }
       if (routineState.openZone > 0) {
         elements.cycleStatus.textContent = `Rutina activa · Regando Zona ${routineState.openZone}`;
         elements.cycleDetail.textContent = `${routine.step || 1} de ${routine.stepCount || "?"} pasos.`;
+        startRoutineTiming();
       } else {
         elements.cycleStatus.textContent = "Rutina activa · sin zona abierta";
         elements.cycleDetail.textContent = "Todas las zonas están cerradas mientras se confirma el siguiente paso.";
+        stopRoutineTiming();
       }
       return;
     }
+    stopRoutineTiming();
     if (routine.status === "scheduled") {
       elements.cycleStatus.textContent = "Rutina programada";
       elements.cycleDetail.textContent = "El controlador ha ajustado el próximo despertar.";
@@ -910,12 +1014,13 @@ function clearRoutineStateFromSleep(state) {
   if (state.routineActive || state.reason !== "poll" || routineState.status !== "watering") return;
 
   immediateRoutinePending = false;
-  routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0 };
+  routineState = { status: "idle", openZone: 0, step: 0, stepCount: 0, receivedAtMs: Date.now() };
   renderAllZoneStatuses();
   updateStopButton();
   updateRunButtons();
   elements.cycleStatus.textContent = "Ciclo detenido";
   elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
+  stopRoutineTiming();
 }
 
 function setSleepState(rawPayload) {
@@ -1150,9 +1255,7 @@ async function clearZoneCommands() {
 }
 
 function showRoutineInSequence(routine) {
-  routine.durations.forEach((duration, index) => {
-    document.querySelector(`#zone-duration-${index + 1}`).textContent = duration > 0 ? `${duration} min` : "Omitida";
-  });
+  renderSequenceDurations(routine.durations);
 }
 
 function finishCycle(message = "Ciclo completado") {
@@ -1162,6 +1265,7 @@ function finishCycle(message = "Ciclo completado") {
   renderAllZoneStatuses();
   elements.cycleStatus.textContent = message;
   elements.cycleDetail.textContent = "Todas las zonas están cerradas.";
+  stopRoutineTiming();
   updateStopButton();
   elements.systemSummary.textContent = "Programador conectado";
   updateRunButtons();
