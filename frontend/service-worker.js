@@ -1,4 +1,4 @@
-const CACHE_NAME = "control-cc2-v23";
+const CACHE_NAME = "control-cc2-v26";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const APP_SHELL = [
   "./style.css",
   "./home.js",
   "./app.js",
+  "./vendor/mqtt.min.js",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
