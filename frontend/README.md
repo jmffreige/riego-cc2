@@ -58,12 +58,10 @@ La web utiliza:
 | Recibir estado del controlador | `riego/device/status` |
 | Recibir estado de rutina | `riego/routine/state` |
 | Recibir estado OTA | `riego/device/ota/state` |
-| Enviar comandos | `riego/zona1/cmd` hasta `riego/zona4/cmd` |
+| Limpiar comandos manuales retenidos | `riego/zona1/cmd` hasta `riego/zona4/cmd` con payload vacío |
 | Guardar las rutinas | `riego/programacion/cmd` con un objeto JSON retenido |
 | Regar ahora | `riego/routine/config` con un objeto JSON retenido |
 | Detener riego en curso | `riego/routine/config` con `{ "enabled": false }` |
-| Abrir la válvula | `ON` |
-| Cerrar la válvula | `OFF` |
 
 Para probar el sistema completo:
 
@@ -71,7 +69,7 @@ Para probar el sistema completo:
 2. Abre la web y conecta el panel.
 3. Entra en **Jardín Frontal** y configura la primera rutina: elige si es manual o programada y define los minutos de cada zona.
 4. Pulsa **Añadir rutina** para crear otros ciclos, por ejemplo uno por la mañana y otro por la tarde.
-5. Pulsa **Guardar todas las rutinas**. La web conserva todas las rutinas en la PWA y publica en `riego/programacion/cmd` solo las programadas.
+5. Pulsa **Guardar todas las rutinas**. La web conserva todas las rutinas en la PWA y publica en `riego/programacion/cmd` solo las programadas. Si el panel no puede publicar en MQTT, mostrará la programación como **pendiente de enviar** y el botón pasará a **Enviar al controlador**.
 6. Pulsa **Regar ahora** dentro de una rutina. La web borra primero los
    comandos retenidos de zona y después publica una rutina inmediata retenida en
    `riego/routine/config`; el ESP32 la ejecuta cuando despierte.
@@ -79,6 +77,10 @@ Para probar el sistema completo:
 8. Pulsa **Detener** si quieres cancelar el riego en curso. La web publica
    `{ "enabled": false }` en `riego/routine/config` y limpia los comandos
    retenidos de zona para que no queden órdenes antiguas compitiendo.
+   Si el ESP32 no pudo conectar a MQTT durante el último despertar, el botón
+   sigue siendo útil mientras el panel esté **En línea**: la cancelación queda
+   retenida en HiveMQ y el ESP32 la leerá en el siguiente despertar en el que sí
+   consiga conectarse.
 
 ## 3. Comprobar el controlador sin ordenador
 
@@ -121,6 +123,11 @@ retenido de `riego/programacion/cmd`. Al conectar, la web lee ese retained y
 actualiza la parte programada de la lista visible; las rutinas manuales se
 mantienen guardadas en `localStorage` de la PWA. Se pueden nombrar, cambiar a
 manual o programada y eliminar individualmente.
+
+Si hay cambios locales sin guardar, o una programación guardada localmente pero
+pendiente de publicar en MQTT, la web no sobrescribe la lista con el retained de
+`riego/programacion/cmd`. Esto evita perder cambios hechos en el navegador antes
+de que lleguen al controlador.
 
 En la PWA, una rutina manual guardada tiene `mode: "manual"` y no necesita días
 ni hora:
@@ -170,9 +177,15 @@ El mensaje MQTT de programación horaria tiene esta estructura:
 }
 ```
 
-El firmware deberá suscribirse a `riego/programacion/cmd`, persistir la lista y ejecutar cada rutina activa de forma autónoma. Si dos rutinas se solapan, el firmware deberá mantener la regla de una sola válvula abierta y encolar o rechazar el segundo ciclo.
+El firmware se suscribe a `riego/programacion/cmd`, conserva la lista en memoria
+RTC y ejecuta cada rutina activa de forma autónoma. Si una rutina programada
+coincide con otra ya activa, el firmware mantiene la regla de una sola válvula
+abierta y no arranca un segundo ciclo en paralelo.
 
-Si la web conecta pero el dispositivo no responde, revisa que el ESP32 y la web utilicen exactamente los mismos topics. El firmware debe implementar los topics de las zonas 2, 3 y 4 para que sus tarjetas controlen dispositivos reales.
+Si la web conecta pero el dispositivo no responde, revisa que el ESP32 y la web
+utilicen exactamente los mismos topics y que el usuario MQTT del panel tenga
+permisos de suscripción y publicación sobre `riego/#` o sobre la lista concreta
+de topics de este documento.
 
 ## 4. Publicar rápidamente con Netlify
 
@@ -226,6 +239,9 @@ Después, en Netlify:
 7. Pulsa **Deploy**.
 
 No hay que configurar variables de entorno porque este frontend no tiene proceso de compilación.
+La librería MQTT.js está incluida en `frontend/vendor/mqtt.min.js` y se cachea
+con el service worker, así que el panel publicado no depende de descargarla
+desde un CDN al abrir la PWA.
 
 ## 6. Instalarla en el iPhone
 
@@ -250,13 +266,17 @@ El icono aparecerá en la pantalla de inicio y la aplicación se abrirá sin la 
 
 ### Los botones están desactivados
 
-Los controles solo se habilitan cuando la etiqueta superior muestra **En línea**.
+Los controles de envío solo se habilitan cuando la etiqueta superior muestra
+**En línea**. Además, **Regar ahora** queda bloqueado mientras hay una rutina
+activa o una rutina inmediata pendiente, y **Detener** solo se habilita cuando
+hay una rutina activa o una orden inmediata pendiente de cancelar.
 
 ### La web no refleja el estado
 
 - El ESP32 debe publicar en el topic de estado correspondiente, desde `riego/zona1/state` hasta `riego/zona4/state`.
 - El mensaje debe ser exactamente `ON` u `OFF`.
-- El firmware publica el estado después de recibir un comando.
+- El firmware publica el estado de las zonas después de aplicar cambios manuales
+  o avanzar una rutina.
 
 ### No aparecen batería ni próximo despertar
 
@@ -276,7 +296,7 @@ El service worker puede conservar una versión anterior. Cierra la app y vuelve 
 ### Regar ahora se comporta raro al detener
 
 - Asegúrate de estar usando la versión actual de la PWA (`CACHE_NAME`
-  `control-cc2-v13` o superior).
+  `control-cc2-v26` o superior).
 - Borra retained antiguos en `riego/zona1/cmd` ... `riego/zona4/cmd` si los
   publicaste manualmente durante pruebas. La PWA actual los limpia al iniciar y
   detener una rutina inmediata.
@@ -292,6 +312,7 @@ Una web estática no puede esconder credenciales incluidas en JavaScript. Para u
 
 - Suscripción a `riego/zona1/state` hasta `riego/zona4/state`.
 - Suscripción a `riego/device/battery`, `riego/device/sleep`, `riego/device/status`, `riego/device/problem` y `riego/routine/state`.
-- Publicación en `riego/zona1/cmd` hasta `riego/zona4/cmd`.
+- Publicación en `riego/zona1/cmd` hasta `riego/zona4/cmd` para limpiar
+  comandos manuales retenidos con payload vacío.
 - Publicación en `riego/programacion/cmd`.
 - Publicación en `riego/routine/config`.
